@@ -506,6 +506,9 @@ function renderMD(text){
   // "sandbox:/mnt/data/x.xlsx" links from the model become in-page download links
   const md = parts.join('').replace(/\]\(sandbox:([^)\s]+)\)/g, (m, p) => `](#dl:${encodeURIComponent(p.split('/').pop())})`);
   let html = DOMPurify.sanitize(marked.parse(md, { breaks: true }));
+  // markdown leaves "**용어**은" as literal asterisks when a Korean particle follows; bold those (outside code)
+  html = html.split(/(<pre[\s\S]*?<\/pre>|<code[\s\S]*?<\/code>)/).map((part, i) =>
+    i % 2 ? part : part.replace(/\*\*([^*\n<>]+?)\*\*/g, '<strong>$1</strong>')).join('');
   html = html.replace(/@@MATH(\d+)@@/g, (m, i) => {
     if (typeof katex === 'undefined') return maths[i].tex;
     return katex.renderToString(maths[i].tex, { displayMode: maths[i].display, throwOnError: false });
