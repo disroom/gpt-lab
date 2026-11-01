@@ -14,19 +14,19 @@
 <style>
 :root{
   --bg:#ffffff; --side:#f9f9f9; --panel:#ffffff; --hover:#ececec; --line:#e5e5e5; --text:#0d0d0d; --muted:#6b6b6b;
-  --accent:#2563eb; --accent-soft:#eff4ff; --user:#f0f0f0; --code:#f6f8fa; --danger:#dc2626; --err-bg:#fef2f2;
+  --accent:#2563eb; --ok:#10a37f; --accent-soft:#eff4ff; --user:#f0f0f0; --code:#f6f8fa; --danger:#dc2626; --err-bg:#fef2f2;
   --shadow:0 8px 28px rgba(0,0,0,.12);
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
     --bg:#212121; --side:#181818; --panel:#2b2b2b; --hover:#2f2f2f; --line:#3a3a3a; --text:#ececec; --muted:#a3a3a3;
-    --accent:#7aa7ff; --accent-soft:#1d2840; --user:#303030; --code:#1a1a1a; --danger:#f87171; --err-bg:#3a1e1e;
+    --accent:#7aa7ff; --ok:#19c37d; --accent-soft:#1d2840; --user:#303030; --code:#1a1a1a; --danger:#f87171; --err-bg:#3a1e1e;
     --shadow:0 8px 28px rgba(0,0,0,.5);
   }
 }
 :root[data-theme="dark"]{
   --bg:#212121; --side:#181818; --panel:#2b2b2b; --hover:#2f2f2f; --line:#3a3a3a; --text:#ececec; --muted:#a3a3a3;
-  --accent:#7aa7ff; --accent-soft:#1d2840; --user:#303030; --code:#1a1a1a; --danger:#f87171; --err-bg:#3a1e1e;
+  --accent:#7aa7ff; --ok:#19c37d; --accent-soft:#1d2840; --user:#303030; --code:#1a1a1a; --danger:#f87171; --err-bg:#3a1e1e;
   --shadow:0 8px 28px rgba(0,0,0,.5);
 }
 *{box-sizing:border-box}
@@ -50,6 +50,14 @@ input,select,textarea{font:inherit;color:inherit}
 .conv .del{border:0;background:none;color:var(--muted);visibility:hidden;padding:0 4px}
 .conv:hover .del{visibility:visible}
 #sideBottom{border-top:1px solid var(--line);padding-top:6px}
+#usage{position:relative;padding:6px 10px 4px;border-radius:10px;cursor:default;outline:0}
+#usage:hover,#usage:focus{background:var(--hover)}
+.urow{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:5px}
+#usageLabel{color:var(--text);font-weight:600}
+.ubar{height:8px;border-radius:999px;background:var(--line);overflow:hidden}
+#usageFill{height:100%;width:0;border-radius:999px;transition:width .4s}
+#usageTip{display:none;position:absolute;left:8px;right:8px;bottom:calc(100% + 6px);background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:10px 12px;font-size:13px;line-height:1.6;z-index:30}
+#usage:hover #usageTip,#usage:focus #usageTip{display:block}
 .small{font-size:12px;color:var(--muted)}
 
 /* ----- header ----- */
@@ -185,7 +193,11 @@ details.think .tbody{border-left:2px solid var(--line);padding:2px 0 2px 12px;ma
   <div id="convList"></div>
   <div id="sideBottom">
     <button class="sbtn" id="openSettings">⚙️ 설정</button>
-    <div class="small" id="spent" style="padding:0 10px"></div>
+    <div id="usage" tabindex="0">
+      <div class="urow"><span>💳 사용량</span><span id="usageLabel"></span></div>
+      <div class="ubar"><div id="usageFill"></div></div>
+      <div id="usageTip"></div>
+    </div>
   </div>
 </aside>
 
@@ -240,6 +252,7 @@ details.think .tbody{border-left:2px solid var(--line);padding:2px 0 2px 12px;ma
     <div class="row"><span>파일 만들기·데이터 분석 (Python)<br><span class="small">켜 두면 대화당 약 $0.03 추가</span></span><input type="checkbox" id="sCode"></div>
     <div class="row">필요할 때 웹 검색 자동 사용 <input type="checkbox" id="sWeb"></div>
     <h3>계정</h3>
+    <div class="row"><span>나에게 할당된 금액 (달러)<br><span class="small">조교가 따로 말하지 않았다면 그대로 두세요</span></span><input type="text" id="sBudget" style="width:80px;text-align:right"></div>
     <div class="row"><span class="small" id="sSpent"></span><button class="btn" id="resetSpent">초기화</button></div>
     <div class="row">대화 기록 모두 삭제 <button class="btn danger" id="clearChats">삭제</button></div>
     <div class="row"><span>API 키 지우고 나가기<br><span class="small">공용 PC라면 꼭 누르세요</span></span><button class="btn danger" id="logout">로그아웃</button></div>
@@ -265,6 +278,19 @@ const BASE_INSTRUCTIONS = `당신은 대학생의 공부와 과제를 돕는 친
 const VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer'];
 const FALLBACK_MODELS = ['gpt-5.1', 'gpt-5', 'gpt-5-mini', 'gpt-4.1', 'gpt-4o'];
 const EFFORTS = [['low', '빠르게'], ['medium', '보통'], ['high', '깊게 생각']];
+const BUDGET_DEFAULT = 10;                       // dollars given to each student key
+const PREFERRED_MODELS = ['gpt-6.1-sol', 'gpt-5.5', 'gpt-5.4'];
+// USD per 1M tokens [input, cached input, output] — developers.openai.com/api/docs/pricing (2026-11)
+const PRICES = {
+  'gpt-6-astra': [10, 1, 50], 'gpt-6.1-sol': [2, 0.1, 10], 'gpt-6.1-terra': [1, 0.05, 5], 'gpt-6-sol': [2, 0.2, 10], 'gpt-6-luna': [0.1, 0.01, 0.5],
+  'gpt-5.6-sol': [4, 0.4, 20], 'gpt-5.6-terra': [2, 0.2, 12], 'gpt-5.6-luna': [0.2, 0.02, 1.2],
+  'gpt-5.5': [5, 0.5, 30], 'gpt-5.4': [2.5, 0.25, 15], 'gpt-5.4-mini': [0.75, 0.075, 4.5], 'gpt-5.2': [1.75, 0.175, 14],
+  'gpt-5.1': [1.25, 0.125, 10], 'gpt-5': [1.25, 0.125, 10], 'gpt-5-mini': [0.25, 0.025, 2],
+  'gpt-4.1': [2, 0.5, 8], 'gpt-4.1-mini': [0.4, 0.1, 1.6], 'gpt-4o': [2.5, 1.25, 10], 'gpt-4o-mini': [0.15, 0.075, 0.6],
+  'o3': [2, 0.5, 8], 'o4-mini': [1.1, 0.275, 4.4]
+};
+const TOOL_COST = { container: 0.03, search: 0.01, image: 0.06, tts: 0.002, stt: 0.003 };   // per use (image is an average)
+const priceOf = model => PRICES[model] || PRICES[model.replace(/-\d{4}-\d{2}-\d{2}$/, '')] || [5, 0.5, 30];   // unknown: assume expensive
 
 const $ = s => document.querySelector(s);
 const store = {
@@ -277,9 +303,9 @@ let apiKey = store.get('gptlab.key', '');
 let convs = store.get('gptlab.convs', []);
 let memories = store.get('gptlab.memories', []);
 const S = Object.assign({ theme: 'system', voice: 'coral', about: '', style: '', memory: true, code: true, web: true,
-  model: '', effort: 'medium', models: [], researchModel: 'o4-mini-deep-research' }, store.get('gptlab.settings', {}));
+  model: '', effort: 'medium', models: [], researchModel: '' }, store.get('gptlab.settings', {}));
 const saveS = () => store.set('gptlab.settings', S);
-const caps = { stream: true, summary: true };   // switched off automatically if the org isn't allowed
+const caps = { stream: true, summary: true, noReasoning: [] };   // switched off automatically if the org/model doesn't allow it
 const sentContent = new WeakMap();               // user message -> exact content sent (images etc.), this session only
 
 let current = null, pending = [], mode = null;   // mode: null | image | research | search
@@ -323,23 +349,27 @@ $('#loginBtn').onclick = async () => {
   }catch(e){ apiKey = ''; $('#loginErr').textContent = friendly(e); }
 };
 $('#keyInput').onkeydown = e => { if (e.key === 'Enter') $('#loginBtn').click(); };
+$('#keyInput').oninput = () => { $('#loginErr').textContent = ''; };
 
 /* ================= models ================= */
 async function loadModels(strict){
   let all = [];
   try{ all = (await (await api('/models')).json()).data.map(m => m.id); }
   catch(e){ if (strict && e.status === 401) throw e; }   // key may lack the models permission
+  // hide expensive (pro), special-purpose and legacy models so the menu stays short
   let ids = all.filter(id => /^(gpt-|o\d)/.test(id) &&
-    !/audio|realtime|tts|transcribe|image|embed|search|instruct|codex|moderation|-\d{4}-\d{2}-\d{2}$|0\d{3}$|16k/.test(id));
+    !/audio|realtime|live|tts|transcribe|image|embed|search|instruct|codex|moderation|chat|pro|nano|-\d{4}-\d{2}-\d{2}$|0\d{3}$|16k/.test(id) &&
+    !/^gpt-(3\.5|4)(-turbo)?$|^gpt-3\.5|^o1/.test(id));
   if (!ids.length) ids = FALLBACK_MODELS.slice();
   ids.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
   S.models = ids;
+  // dedicated deep-research models if the key has them; otherwise the chat model researches with web search
   const dr = all.filter(id => /deep-research$/.test(id));
-  if (dr.length) S.researchModel = dr.find(id => id.includes('mini')) || dr[0];
-  if (!ids.includes(S.model)) S.model = ids.find(id => /^gpt-\d+(\.\d+)?$/.test(id)) || ids[0];
+  S.researchModel = dr.length ? (dr.find(id => id.includes('mini')) || dr[0]) : '';
+  if (!ids.includes(S.model)) S.model = PREFERRED_MODELS.find(id => ids.includes(id)) || ids.find(id => /^gpt-\d+(\.\d+)?$/.test(id)) || ids[0];
   saveS(); renderModel();
 }
-const isReasoning = id => /^(gpt-5|o\d)/.test(id) && !/chat/.test(id);
+const isReasoning = id => /^(gpt-([5-9]|\d\d)|o\d)/.test(id) && !/chat/.test(id) && !caps.noReasoning?.includes(id);
 function renderModel(){
   $('#modelName').textContent = S.model + (isReasoning(S.model) ? ' · ' + EFFORTS.find(e => e[0] === S.effort)[1] : '');
   const menu = $('#modelMenu');
@@ -373,6 +403,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme
 $('#sVoice').innerHTML = VOICES.map(v => `<option>${v}</option>`).join('');
 function openSettings(){
   $('#sTheme').value = S.theme; $('#sVoice').value = S.voice; $('#sAbout').value = S.about; $('#sStyle').value = S.style;
+  $('#sBudget').value = S.budget || BUDGET_DEFAULT;
   $('#sMemory').checked = S.memory; $('#sCode').checked = S.code; $('#sWeb').checked = S.web;
   renderMemories(); showSpent();
   $('#settingsModal').classList.add('open');
@@ -384,6 +415,7 @@ $('#sTheme').onchange = e => { S.theme = e.target.value; saveS(); applyTheme(); 
 $('#sVoice').onchange = e => { S.voice = e.target.value; saveS(); };
 $('#sAbout').oninput = e => { S.about = e.target.value; saveS(); };
 $('#sStyle').oninput = e => { S.style = e.target.value; saveS(); };
+$('#sBudget').oninput = e => { const v = parseFloat(e.target.value); if (v > 0){ S.budget = v; saveS(); showSpent(); } };
 $('#sMemory').onchange = e => { S.memory = e.target.checked; saveS(); };
 $('#sCode').onchange = e => { S.code = e.target.checked; saveS(); };
 $('#sWeb').onchange = e => { S.web = e.target.checked; saveS(); };
@@ -405,16 +437,32 @@ $('#logout').onclick = () => {
   ['gptlab.key', 'gptlab.convs', 'gptlab.memories', 'gptlab.settings', 'gptlab.spent'].forEach(store.del);
   location.reload();
 };
-function addSpent(u){
-  if (!u) return;
+/* ---- spending estimate (this browser only; the OpenAI dashboard is the real number) ---- */
+function getSpent(){
   const s = store.get('gptlab.spent', { in: 0, out: 0 });
+  if (s.usd === undefined){ const p = priceOf(S.model || 'gpt-5.5'); s.usd = (s.in * p[0] + s.out * p[2]) / 1e6; }   // older versions kept tokens only
+  return s;
+}
+function addSpent(u, model){
+  if (!u) return;
+  const s = getSpent(), p = priceOf(model);
+  const cached = u.input_tokens_details?.cached_tokens || 0;
   s.in += u.input_tokens || 0; s.out += u.output_tokens || 0;
+  s.usd += ((u.input_tokens - cached) * p[0] + cached * p[1] + u.output_tokens * p[2]) / 1e6;
   store.set('gptlab.spent', s); showSpent();
 }
+function addCost(usd){ const s = getSpent(); s.usd += usd; store.set('gptlab.spent', s); showSpent(); }
+const money = v => '$' + v.toFixed(v < 10 ? 2 : 1);
 function showSpent(){
-  const s = store.get('gptlab.spent', { in: 0, out: 0 });
-  const t = `사용한 토큰: 입력 ${s.in.toLocaleString()} · 출력 ${s.out.toLocaleString()}`;
-  $('#spent').textContent = t; $('#sSpent').textContent = t + ' (이 PC 기준)';
+  const s = getSpent(), budget = S.budget || BUDGET_DEFAULT;
+  const pct = Math.min(100, s.usd / budget * 100), left = Math.max(0, budget - s.usd);
+  const bar = $('#usageFill');
+  bar.style.width = Math.max(pct, s.usd > 0 ? 1.5 : 0) + '%';
+  bar.style.background = pct >= 90 ? 'var(--danger)' : pct >= 70 ? '#f59e0b' : 'var(--ok)';
+  $('#usageLabel').textContent = `${money(s.usd)} / ${money(budget)} 사용`;
+  $('#usageTip').innerHTML = `<b>사용: ${money(s.usd)}</b> (${pct.toFixed(1)}%)<br><b>남음: ${money(left)}</b><br>` +
+    `<span class="small">입력 ${s.in.toLocaleString()} · 출력 ${s.out.toLocaleString()} 토큰<br>이 컴퓨터에서 쓴 양으로 계산한 추정치예요. 다른 PC에서 쓴 양은 빠져 있어요.</span>`;
+  $('#sSpent').textContent = `추정 사용액 ${money(s.usd)} / ${money(budget)} (이 PC 기준)`;
 }
 
 /* ================= markdown ================= */
@@ -431,14 +479,16 @@ function renderMD(text){
       return `@@MATH${maths.length - 1}@@`;
     });
   }
-  let html = DOMPurify.sanitize(marked.parse(parts.join(''), { breaks: true }));
+  // "sandbox:/mnt/data/x.xlsx" links from the model become in-page download links
+  const md = parts.join('').replace(/\]\(sandbox:([^)\s]+)\)/g, (m, p) => `](#dl:${encodeURIComponent(p.split('/').pop())})`);
+  let html = DOMPurify.sanitize(marked.parse(md, { breaks: true }));
   html = html.replace(/@@MATH(\d+)@@/g, (m, i) => {
     if (typeof katex === 'undefined') return maths[i].tex;
     return katex.renderToString(maths[i].tex, { displayMode: maths[i].display, throwOnError: false });
   });
   return html;
 }
-function decorate(el){
+function decorate(el, m){
   el.querySelectorAll('pre').forEach(pre => {
     const code = pre.querySelector('code');
     if (code && typeof hljs !== 'undefined') try{ hljs.highlightElement(code); }catch{}
@@ -447,7 +497,17 @@ function decorate(el){
     b.onclick = () => { navigator.clipboard.writeText((code || pre).innerText); b.textContent = '복사됨'; setTimeout(() => b.textContent = '복사', 1200); };
     pre.appendChild(b);
   });
-  el.querySelectorAll('a').forEach(a => { a.target = '_blank'; a.rel = 'noopener'; });
+  el.querySelectorAll('a').forEach(a => {
+    const href = a.getAttribute('href') || '';
+    if (href.startsWith('#dl:')){
+      a.onclick = ev => {
+        ev.preventDefault();
+        const name = decodeURIComponent(href.slice(4));
+        const file = m?.files?.find(f => f.name === name);
+        file ? downloadFile(file, a) : alert('파일을 찾을 수 없습니다. 아래쪽 다운로드 버튼을 이용하세요.');
+      };
+    } else { a.target = '_blank'; a.rel = 'noopener'; }
+  });
 }
 function plainText(m){
   const d = document.createElement('div'); d.innerHTML = renderMD(m.text || '');
@@ -531,7 +591,7 @@ function finishAssistant(d, m){
   d.querySelector('.tools').innerHTML = '';
   for (const t of m.tools || []) addTool(d, t);
   if (m.reasoning) renderThink(d, m);
-  const body = d.querySelector('.body'); body.innerHTML = renderMD(m.text || ''); decorate(body);
+  const body = d.querySelector('.body'); body.innerHTML = renderMD(m.text || ''); decorate(body, m);
   renderExtras(d, m);
   const acts = d.querySelector('.acts'); acts.innerHTML = '';
   acts.append(copyBtn(() => m.text), actBtn('🔊', '소리 내어 읽기', b => speak(m, b)), actBtn('🔄', '다시 생성', () => regenerate(m)));
@@ -649,6 +709,7 @@ async function speak(m, btn){
   const text = plainText(m).slice(0, 4000);
   try{
     const blob = await (await api('/audio/speech', { method: 'POST', json: { model: 'gpt-4o-mini-tts', voice: S.voice, input: text, response_format: 'mp3' } })).blob();
+    addCost(TOOL_COST.tts);
     if (speakingBtn !== btn) return;
     audio = new Audio(URL.createObjectURL(blob));
     audio.onended = stopSpeak;
@@ -681,6 +742,7 @@ $('#micBtn').onclick = async () => {
       try{
         const fd = new FormData(); fd.append('file', blob, 'voice.webm'); fd.append('model', model);
         text = (await (await api('/audio/transcriptions', { method: 'POST', body: fd })).json()).text || '';
+        addCost(TOOL_COST.stt);
         break;
       }catch(e){ if (model === 'whisper-1') alert('받아쓰기 실패: ' + friendly(e)); }
     }
@@ -702,7 +764,7 @@ function addFiles(list){
   renderChips(); updateSend();
 }
 const MODES = { image: '🎨 이미지 만들기', research: '🔭 딥 리서치', search: '🌐 웹 검색' };
-function setMode(v){ mode = v; renderChips(); input.placeholder = v === 'image' ? '어떤 이미지를 만들까요?' : v === 'research' ? '무엇을 깊이 조사할까요? (5~20분 걸려요)' : v === 'search' ? '웹에서 검색할 내용을 입력하세요' : '무엇이든 물어보세요'; }
+function setMode(v){ mode = v; renderChips(); input.placeholder = v === 'image' ? '어떤 이미지를 만들까요?' : v === 'research' ? '무엇을 깊이 조사할까요? (몇 분 걸려요)' : v === 'search' ? '웹에서 검색할 내용을 입력하세요' : '무엇이든 물어보세요'; }
 function renderChips(){
   const box = $('#chips'); box.innerHTML = '';
   if (mode){
@@ -739,6 +801,7 @@ async function ensureContainer(force){
   if (!current.containerId || stale || force){
     const j = await (await api('/containers', { method: 'POST', json: { name: 'gptlab-' + current.id } })).json();
     current.containerId = j.id; current.knownFiles = [];
+    addCost(TOOL_COST.container);
   }
   current.containerUsed = Date.now();
   return current.containerId;
@@ -754,7 +817,8 @@ async function newContainerFiles(){
   if (!current.containerId) return [];
   try{
     const j = await (await api(`/containers/${current.containerId}/files?limit=100&order=desc`)).json();
-    const fresh = j.data.filter(f => !current.knownFiles.includes(f.id) && f.source !== 'user' && f.path && !/\/\.|__pycache__/.test(f.path));
+    // only finished files directly in /mnt/data (skip the model's scratch folders and auto-named chart dumps)
+    const fresh = j.data.filter(f => !current.knownFiles.includes(f.id) && f.source !== 'user' && /^\/mnt\/data\/[^/]+$/.test(f.path || '') && !/\/cfile_[^/]*$/.test(f.path));
     current.knownFiles.push(...fresh.map(f => f.id));
     return fresh.map(f => ({ cid: current.containerId, fid: f.id, name: f.path.split('/').pop() }));
   }catch{ return []; }
@@ -810,7 +874,7 @@ async function send(opts){
     pending = []; input.value = ''; autoGrow();
   }
   const useMode = mode; setMode(null);
-  if (useMode === 'research' && !confirm('딥 리서치는 5~20분 걸리고, 일반 질문보다 비용이 훨씬 많이 듭니다(수십 배 이상). 진행할까요?')) { input.value = text; autoGrow(); updateSend(); return; }
+  if (useMode === 'research' && !confirm('딥 리서치는 1~10분 정도 걸리고, 웹을 여러 번 검색하느라 일반 질문보다 비용이 몇 배~수십 배 듭니다. 진행할까요?')) { input.value = text; autoGrow(); updateSend(); return; }
   busy = true; updateSend(); stopSpeak();
 
   if (!current.messages.length){ $('#msgs').innerHTML = ''; current.title = (text || fileNames[0] || '새 채팅').slice(0, 30); }
@@ -818,7 +882,7 @@ async function send(opts){
   const userMsg = { role: 'user', text, files: fileNames, prev: current.lastResponseId };
   current.messages.push(userMsg); addUser(userMsg); renderList(); scrollDown(true);
 
-  const m = { role: 'assistant', text: '', reasoning: '', tools: [], files: [], images: [], sources: [], model: useMode === 'research' ? S.researchModel : S.model };
+  const m = { role: 'assistant', text: '', reasoning: '', tools: [], files: [], images: [], sources: [], model: useMode === 'research' ? (S.researchModel || S.model) : S.model };
   const d = addAssistant(); markLast();
   const status = document.createElement('div'); status.className = 'status';
   const setStatus = s => { status.innerHTML = s ? `<span class="dot"></span>` : ''; if (s) status.append(s); };
@@ -834,11 +898,11 @@ async function send(opts){
       for (const f of files){
         if (f.kind === 'image') content.push({ type: 'input_image', image_url: await toDataURL(f.file) });
         else if (f.kind === 'pdf') content.push({ type: 'input_file', filename: f.file.name, file_data: await toDataURL(f.file) });
-        else { setStatus('파일 올리는 중... ' + f.file.name); paths.push(await uploadToContainer(f.file)); }
+        else { setStatus('파일 올리는 중... ' + f.file.name); paths.push(`${f.file.name} → ${await uploadToContainer(f.file)}`); }
       }
       if (!sentText){
         sentText = text || '첨부한 파일을 확인해줘.';
-        if (paths.length) sentText += '\n\n[업로드한 파일 경로: ' + paths.join(', ') + ']';
+        if (paths.length) sentText += '\n\n[업로드한 파일 (원래 이름 → 실제 경로): ' + paths.join(', ') + ']';
       }
       content.unshift({ type: 'input_text', text: sentText });
     }
@@ -860,6 +924,8 @@ async function send(opts){
   }
   status.remove();
   if (useCode){ current.containerUsed = Date.now(); m.files.push(...(await newContainerFiles()).filter(f => !m.files.some(x => x.fid === f.fid))); }
+  if (m._plots && !m.files.some(f => /\.(png|jpe?g|gif|webp)$/i.test(f.name))) m.images.push(m._plots[m._plots.length - 1]);
+  delete m._plots;
   m.responseId = current.lastResponseId;
   finishAssistant(d, m); markLast();
   const persisted = { ...m, images: [] };
@@ -908,6 +974,7 @@ async function respond(inputItems, ctx, { useCode, useMode }){
       const msg = e.message || '';
       if (e.name === 'AbortError') throw e;
       if (body.reasoning?.summary && /summar/i.test(msg)){ caps.summary = false; continue; }
+      if (body.reasoning && /reasoning|effort/i.test(msg)){ caps.noReasoning.push(ctx.m.model); renderModel(); continue; }
       if (body.stream && /stream/i.test(msg)){ caps.stream = false; continue; }
       if (useCode && !newContainer && /container/i.test(msg)){ newContainer = true; continue; }
       if (body.previous_response_id && /previous|not found/i.test(msg)){ current.lastResponseId = null; continue; }
@@ -966,7 +1033,7 @@ function handleEvent(ev, ctx){
 function addUsage(m, u){
   if (!u) return;
   m.usage = { input_tokens: (m.usage?.input_tokens || 0) + (u.input_tokens || 0), output_tokens: (m.usage?.output_tokens || 0) + (u.output_tokens || 0) };
-  addSpent(u);
+  addSpent(u, m.model);
 }
 
 /* handles a finished output item; `full` = also take text/reasoning from it (non-streaming responses) */
@@ -976,15 +1043,29 @@ function itemDone(it, ctx, full){
     const t = (it.summary || []).map(s => s.text).join('\n\n');
     if (t) m.reasoning += (m.reasoning ? '\n\n' : '') + t;
   } else if (it.type === 'code_interpreter_call'){
+    // all Python runs of one answer go into a single collapsible row
     const logs = (it.outputs || []).filter(o => o.type === 'logs').map(o => o.logs).join('\n');
-    const tool = { label: '🐍 Python 코드 실행함', detail: (it.code || '') + (logs ? '\n\n# 결과\n' + logs : '') };
-    m.tools.push(tool); addTool(d, tool);
-    for (const o of it.outputs || []) if (o.type === 'image' && o.url) m.images.push(o.url);
+    let tool = m.tools.find(t => t.py);
+    if (!tool){ tool = { py: 0, label: '', detail: '' }; m.tools.push(tool); }
+    tool.py++;
+    tool.label = `🐍 Python 코드 ${tool.py}번 실행함`;
+    tool.detail += (tool.detail ? '\n\n# ─────────────\n' : '') + (it.code || '') + (logs ? '\n\n# 결과\n' + logs.slice(0, 2000) : '');
+    d.querySelector('.tools').innerHTML = ''; m.tools.forEach(t => addTool(d, t));
+    // inline plots are kept aside; shown only if the answer produced no image files (see send)
+    for (const o of it.outputs || []) if (o.type === 'image' && o.url) (m._plots ||= []).push(o.url);
   } else if (it.type === 'web_search_call'){
-    const q = it.action?.query;
-    const tool = { label: '🌐 웹 검색함' + (q ? ': ' + q : '') }; m.tools.push(tool); addTool(d, tool);
+    // all searches of one answer go into a single collapsible row
+    const q = it.action?.query || (it.action?.queries || []).join(', ');
+    let tool = m.tools.find(t => t.web);
+    if (!tool){ tool = { web: 0, label: '', detail: '' }; m.tools.push(tool); }
+    tool.web++;
+    tool.label = tool.web === 1 && q ? '🌐 웹 검색함: ' + q : `🌐 웹 검색 ${tool.web}번 함`;
+    if (q) tool.detail += (tool.detail ? '\n' : '') + '• ' + q;
+    d.querySelector('.tools').innerHTML = ''; m.tools.forEach(t => addTool(d, t));
+    addCost(TOOL_COST.search);
   } else if (it.type === 'image_generation_call' && it.result){
     m.images.push('data:image/png;base64,' + it.result);
+    addCost(TOOL_COST.image);
   } else if (it.type === 'function_call'){
     ctx.calls.push(it);
   } else if (it.type === 'message'){
@@ -992,7 +1073,7 @@ function itemDone(it, ctx, full){
       if (full && c.type === 'output_text'){ endThinking(m); m.text += (m.text ? '\n\n' : '') + c.text; }
       for (const a of c.annotations || []){
         if (a.type === 'url_citation' && !m.sources.some(s => s.url === a.url)) m.sources.push({ url: a.url, title: a.title });
-        if (a.type === 'container_file_citation' && !m.files.some(f => f.fid === a.file_id)){
+        if (a.type === 'container_file_citation' && !m.files.some(f => f.fid === a.file_id) && !/^cfile_/.test(a.filename || 'cfile_')){
           m.files.push({ cid: a.container_id, fid: a.file_id, name: a.filename || a.file_id });
           current.knownFiles.push(a.file_id);
         }
@@ -1012,8 +1093,11 @@ function processResponse(resp, ctx){
 
 /* deep research runs in the background on OpenAI's side; we poll until it's done */
 async function deepResearch(content, ctx){
+  const dedicated = /deep-research/.test(ctx.m.model);
   const body = { model: ctx.m.model, input: [{ role: 'user', content }], background: true, store: true,
-    tools: [{ type: 'web_search_preview' }], instructions: '한국어로, 출처를 밝힌 구조화된 보고서를 작성하세요.' + (S.about.trim() ? '\n사용자 소개: ' + S.about.trim() : '') };
+    tools: [{ type: dedicated ? 'web_search_preview' : 'web_search' }],
+    instructions: '여러 번 웹 검색을 해서 자료를 충분히 모은 뒤, 한국어로 제목·요약·본문·결론이 있는 구조화된 보고서를 작성하세요. 모든 주장에 출처를 밝히세요.' + (S.about.trim() ? '\n사용자 소개: ' + S.about.trim() : '') };
+  if (!dedicated && isReasoning(ctx.m.model)) body.reasoning = caps.summary ? { effort: 'high', summary: 'auto' } : { effort: 'high' };
   if (current.lastResponseId) body.previous_response_id = current.lastResponseId;
   let job;
   try{ job = await (await api('/responses', { method: 'POST', json: body })).json(); }
