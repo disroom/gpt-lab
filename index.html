@@ -154,6 +154,17 @@ details.think .tbody{border-left:2px solid var(--line);padding:2px 0 2px 12px;ma
 #plusMenu{bottom:56px;left:6px}
 #hint{max-width:768px;margin:6px auto 0;text-align:center;font-size:12px;color:var(--muted)}
 
+/* ----- streamlit runner ----- */
+.runbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:-4px 0 12px}
+.runbar button{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:6px 14px;font-size:14px}
+.runbar button.run{background:#ff4b4b;border-color:#ff4b4b;color:#fff;font-weight:700}
+.runbar button:hover{filter:brightness(.95)}
+#runner{position:fixed;inset:0;z-index:35;background:var(--bg);display:none;flex-direction:column}
+#runner.open{display:flex}
+.runhead{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line)}
+.runhead .small{flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+#runFrame{flex:1;border:0;width:100%;background:#fff}
+
 /* ----- modal ----- */
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:30;padding:16px}
 .overlay.open{display:flex}
@@ -232,6 +243,16 @@ details.think .tbody{border-left:2px solid var(--line);padding:2px 0 2px 12px;ma
   <input type="file" id="fileInput" multiple hidden>
 </main>
 
+<div id="runner">
+  <div class="runhead">
+    <b>▶ Streamlit 앱</b>
+    <span class="small" id="runInfo"></span>
+    <button class="btn" id="runCode">⬇ app.py 저장</button>
+    <button class="btn" id="runClose">✕ 닫기</button>
+  </div>
+  <iframe id="runFrame" title="Streamlit 앱 실행 화면"></iframe>
+</div>
+
 <div class="overlay" id="settingsModal">
   <div class="modal">
     <h2>설정 <button data-close>✕</button></h2>
@@ -274,7 +295,10 @@ const API = 'https://api.openai.com/v1';
 const BASE_INSTRUCTIONS = `당신은 대학생의 공부와 과제를 돕는 친절한 한국어 AI 어시스턴트입니다.
 - 사용자가 엑셀, 워드, PDF, PPT, CSV, 이미지, 그래프 같은 파일을 원하면 Python 도구로 직접 만들어 /mnt/data/ 에 저장하세요. 화면에 다운로드 버튼이 자동으로 표시되니 "아래 버튼으로 받으세요"라고 안내하면 됩니다. 파일명은 내용을 알 수 있게 짓고, 한글이 들어가는 문서·그래프는 글꼴이 깨지지 않게 처리하세요.
 - 업로드된 파일은 /mnt/data/ 경로에 있습니다. 분석 요청이 오면 먼저 파일을 열어 구조를 확인하세요.
-- 수식은 LaTeX 형식(\\( \\), \\[ \\])으로 쓰세요.`;
+- 수식은 LaTeX 형식(\\( \\), \\[ \\])으로 쓰세요.
+- Streamlit 앱(웹앱, 대시보드, 추천 시스템 등)을 만들어 달라고 하면 app.py 전체를 하나의 \`\`\`python 코드 블록으로 답하세요. 화면의 "▶ 앱 실행" 버튼을 누르면 사용자의 브라우저에서 바로 실행됩니다(설치 불필요). Python 도구로 streamlit을 실행하려 하지 마세요.
+- 그 앱에서 사용자가 올린 파일은 원래 파일명 그대로(예: pd.read_csv("설문결과.csv")) 현재 폴더에서 읽으세요. /mnt/data 경로는 쓰지 마세요.
+- 앱의 차트는 st.bar_chart, st.line_chart 같은 Streamlit 기본 차트나 plotly를 쓰세요. matplotlib은 브라우저 실행 시 한글이 깨집니다.`;
 const VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer'];
 const FALLBACK_MODELS = ['gpt-5.1', 'gpt-5', 'gpt-5-mini', 'gpt-4.1', 'gpt-4o'];
 const EFFORTS = [['low', '빠르게'], ['medium', '보통'], ['high', '깊게 생각']];
@@ -496,6 +520,14 @@ function decorate(el, m){
     b.className = 'copy'; b.textContent = '복사';
     b.onclick = () => { navigator.clipboard.writeText((code || pre).innerText); b.textContent = '복사됨'; setTimeout(() => b.textContent = '복사', 1200); };
     pre.appendChild(b);
+    const src = (code || pre).textContent;
+    if (/^\s*(import streamlit|from streamlit)/m.test(src)){
+      const bar = document.createElement('div'); bar.className = 'runbar';
+      bar.innerHTML = '<button class="run">▶ 앱 실행</button><button class="file">⬇ app.py 저장</button><span class="small">설치 없이 이 브라우저에서 바로 실행돼요</span>';
+      bar.querySelector('.run').onclick = () => runApp(src);
+      bar.querySelector('.file').onclick = () => saveText('app.py', src);
+      pre.after(bar);
+    }
   });
   el.querySelectorAll('a').forEach(a => {
     const href = a.getAttribute('href') || '';
@@ -627,6 +659,11 @@ function renderExtras(d, m){
       b.lastChild.textContent = file.name;
       b.onclick = () => downloadFile(file, b);
       f.appendChild(b);
+      if (/\.py$/i.test(file.name)){
+        const r = document.createElement('button'); r.className = 'file'; r.textContent = '▶ 앱 실행';
+        r.onclick = async () => { try{ runApp(await (await fetchContainerFile(file)).text()); }catch(e){ alert('파일을 불러오지 못했습니다: ' + friendly(e)); } };
+        f.appendChild(r);
+      }
     }
     ex.appendChild(f);
     for (const file of m.files) if (/\.(png|jpe?g|gif|webp)$/i.test(file.name)) previewImage(file, ex, f);
@@ -664,6 +701,52 @@ async function previewImage(file, ex, before){
     ex.insertBefore(w, before); scrollDown();
   }catch{}
 }
+
+/* ================= Streamlit apps run in the browser (stlite = Streamlit on Pyodide) ================= */
+const STLITE = 'https://cdn.jsdelivr.net/npm/@stlite/browser@1.11.0/build/';
+const uploads = new Map();   // conversation id -> { filename: File } uploaded this session, mounted next to app.py
+const PY_STDLIB = new Set('os sys io re json math random datetime time collections itertools functools typing pathlib csv statistics string base64 uuid textwrap decimal fractions copy warnings dataclasses enum zipfile tempfile glob hashlib calendar locale operator heapq bisect pprint traceback urllib html abc contextlib streamlit pandas numpy altair pyarrow'.split(' '));
+const PIP_NAMES = { sklearn: 'scikit-learn', PIL: 'Pillow', bs4: 'beautifulsoup4', yaml: 'pyyaml', cv2: 'opencv-python' };
+function saveText(name, text){
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/x-python' }));
+  const a = document.createElement('a'); a.href = url; a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+async function runApp(code){
+  const reqs = [...new Set([...code.matchAll(/^\s*(?:import|from)\s+([A-Za-z_]\w*)/gm)].map(x => x[1]))]
+    .filter(n => !PY_STDLIB.has(n)).map(n => PIP_NAMES[n] || n);
+  // files the student uploaded in this chat, plus data files GPT made, under their original names
+  const files = {};
+  for (const [name, f] of Object.entries(uploads.get(current.id) || {})) files[name] = new Uint8Array(await f.arrayBuffer());
+  for (const m of current.messages) for (const f of m.files || [])
+    if (/\.(csv|xlsx|xls|json|txt|tsv)$/i.test(f.name) && !files[f.name]){
+      try{ files[f.name] = new Uint8Array(await (await fetchContainerFile(f)).arrayBuffer()); }catch{}
+    }
+  $('#runInfo').textContent = '불러온 파일: ' + (Object.keys(files).join(', ') || '없음') + (reqs.length ? ' · 추가 설치: ' + reqs.join(', ') : '');
+  $('#runCode').onclick = () => saveText('app.py', code);
+  const frame = $('#runFrame');
+  frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="${STLITE}stlite.css">
+<style>html,body{margin:0;height:100%;font-family:sans-serif}#root{height:100%}#wait{padding:40px;color:#555;text-align:center}</style></head>
+<body><div id="root"><div id="wait">앱을 준비하는 중입니다... 처음 실행은 30초~1분 걸려요 (브라우저에 파이썬을 불러오는 중)</div></div>
+<script type="module">
+import { mount } from "${STLITE}stlite.js";
+addEventListener('message', e => {
+  if (e.data?.type !== 'run') return;
+  document.getElementById('root').innerHTML = '';
+  mount({ entrypoint: 'app.py', requirements: e.data.requirements, files: { 'app.py': e.data.code, ...e.data.files },
+    streamlitConfig: { 'client.toolbarMode': 'viewer' } }, document.getElementById('root'));
+});
+parent.postMessage({ type: 'stlite-ready' }, '*');
+<\/script></body></html>`;
+  const onReady = e => {
+    if (e.source !== frame.contentWindow || e.data?.type !== 'stlite-ready') return;
+    removeEventListener('message', onReady);
+    frame.contentWindow.postMessage({ type: 'run', code, files, requirements: reqs }, '*');
+  };
+  addEventListener('message', onReady);
+  $('#runner').classList.add('open');
+}
+$('#runClose').onclick = () => { $('#runner').classList.remove('open'); $('#runFrame').srcdoc = ''; };
 
 /* ================= edit / regenerate ================= */
 function truncateFrom(userMsg){
@@ -896,6 +979,8 @@ async function send(opts){
       content = [];
       const paths = [];
       for (const f of files){
+        if (!uploads.has(current.id)) uploads.set(current.id, {});
+        uploads.get(current.id)[f.file.name] = f.file;   // kept so a Streamlit app made in this chat can read it
         if (f.kind === 'image') content.push({ type: 'input_image', image_url: await toDataURL(f.file) });
         else if (f.kind === 'pdf') content.push({ type: 'input_file', filename: f.file.name, file_data: await toDataURL(f.file) });
         else { setStatus('파일 올리는 중... ' + f.file.name); paths.push(`${f.file.name} → ${await uploadToContainer(f.file)}`); }
