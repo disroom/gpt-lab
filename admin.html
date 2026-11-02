@@ -20,7 +20,7 @@ button,input{font:inherit;color:inherit}
 #gate input{width:100%;padding:12px;border:1px solid var(--line);border-radius:12px;margin:16px 0 8px;background:var(--panel);text-align:center;letter-spacing:2px}
 #gateErr{color:var(--danger);font-size:13px;min-height:20px}
 .top{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:18px}
-.top .grow{flex:1}
+.top .grow{flex:1 1 320px;min-width:260px}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:18px}
 .card{background:var(--soft);border-radius:14px;padding:14px 16px}
 .card .v{font-size:26px;font-weight:700}
@@ -61,12 +61,14 @@ td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
     <div class="cards" id="cards"></div>
     <div class="tools">
       <input id="q" placeholder="이름 검색">
-      <span class="small">항목 이름을 누르면 정렬됩니다 · 3분마다 자동 갱신</span>
+      <span class="small">항목 이름을 누르면 정렬됩니다 · 3분마다 자동 갱신 · <span style="color:var(--danger)">빨간 모델</span>은 비싼 모델(지금은 학생 메뉴에서 숨김)</span>
     </div>
+    <div style="overflow-x:auto">
     <table>
-      <thead><tr><th data-k="name">이름</th><th data-k="usd" style="text-align:right">사용</th><th data-k="left" style="text-align:right">남음</th><th data-k="usd">사용률</th></tr></thead>
+      <thead><tr><th data-k="name">이름</th><th data-k="usd" style="text-align:right">사용</th><th data-k="left" style="text-align:right">남음</th><th data-k="usd">사용률</th><th>주로 쓴 곳</th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
+    </div>
   </div>
 </div>
 <script>
@@ -75,6 +77,16 @@ const $ = s => document.querySelector(s);
 const ls = { get(k, d){ try{ return localStorage.getItem(k) ?? d; }catch{ return d; } }, set(k, v){ try{ localStorage.setItem(k, v); }catch{} }, del(k){ try{ localStorage.removeItem(k); }catch{} } };
 let code = ls.get('gptlab.adminCode', ''), data = null, sortKey = 'usd', sortDir = -1, timer = 0;
 const money = v => '$' + v.toFixed(2);
+// "gpt-6-astra, input" / "web search tool calls" -> per-model totals
+const EXPENSIVE = /astra|gpt-5\.5|gpt-5\.6-sol|-pro/;
+function mainUse(items){
+  const by = {};
+  for (const [k, v] of items || []){
+    const m = /web search/.test(k) ? '웹 검색' : /container/.test(k) ? 'Python' : /image/.test(k) ? '이미지 생성' : k.split(',')[0].replace(/-\d{4}-\d{2}-\d{2}$/, '').trim();
+    by[m] = (by[m] || 0) + v;
+  }
+  return Object.entries(by).sort((a, b) => b[1] - a[1]).filter(([, v]) => v >= 0.01).slice(0, 2);
+}
 
 async function load(refresh){
   const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, refresh }) });
@@ -103,7 +115,8 @@ function render(){
     const tag = p.pct >= 90 ? '<span class="tag d">90%↑</span>' : p.pct >= 70 ? '<span class="tag w">70%↑</span>' : p.usd === 0 ? '<span class="tag z">미사용</span>' : '';
     const name = document.createElement('span'); name.textContent = p.name;
     return `<tr><td>${name.outerHTML}${tag}</td><td class="num">${money(p.usd)}</td><td class="num">${money(p.left)}</td>
-      <td><div style="display:flex;align-items:center;gap:8px"><div class="bar" style="flex:1"><i style="width:${Math.min(100, p.pct)}%;background:${color}"></i></div><span class="small" style="min-width:44px;text-align:right">${p.pct.toFixed(0)}%</span></div></td></tr>`;
+      <td><div style="display:flex;align-items:center;gap:8px"><div class="bar" style="flex:1"><i style="width:${Math.min(100, p.pct)}%;background:${color}"></i></div><span class="small" style="min-width:44px;text-align:right">${p.pct.toFixed(0)}%</span></div></td>
+      <td class="small">${mainUse(p.items).map(([m, v]) => `<span style="${EXPENSIVE.test(m) ? 'color:var(--danger);font-weight:600' : ''}">${m} ${money(v)}</span>`).join('<br>') || '-'}</td></tr>`;
   }).join('');
 }
 async function enter(){

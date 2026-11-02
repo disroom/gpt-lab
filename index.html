@@ -71,7 +71,10 @@ input,select,textarea{font:inherit;color:inherit}
 .pop.open{display:block}
 .pop .item{display:flex;align-items:center;gap:10px;width:100%;border:0;background:none;border-radius:10px;padding:9px 12px;text-align:left;font-size:14px}
 .pop .item:hover{background:var(--hover)}
-.pop .item .chk{margin-left:auto;color:var(--accent)}
+.pop .item .chk{color:var(--accent);min-width:14px}
+.pop .item .tier{margin-left:auto;font-size:11px;border-radius:999px;padding:1px 8px;background:var(--hover);color:var(--muted)}
+.pop .item .tier.ok{color:var(--ok)}
+.pop .item .tier.hi{color:var(--danger)}
 .pop .desc{display:block;font-size:12px;color:var(--muted)}
 .pop .label{font-size:12px;color:var(--muted);padding:8px 12px 4px}
 .seg{display:flex;gap:4px;padding:4px 8px 8px}
@@ -354,6 +357,8 @@ const PRICES = {
   'o3': [2, 0.5, 8], 'o4-mini': [1.1, 0.275, 4.4]
 };
 const TOOL_COST = { container: 0.03, search: 0.01, image: 0.06, tts: 0.002, stt: 0.003 };   // per use (image is an average)
+const MAX_OUTPUT_PRICE = 10;   // $/1M output tokens; pricier models are hidden from the menu
+const tierOf = id => { const o = PRICES[id]?.[2] ?? 99; return o <= 2 ? ['아주 저렴', 'ok'] : o <= 5 ? ['저렴 · 추천', 'ok'] : o <= 10 ? ['보통', 'mid'] : ['비쌈', 'hi']; };
 const priceOf = model => PRICES[model] || PRICES[model.replace(/-\d{4}-\d{2}-\d{2}$/, '')] || [5, 0.5, 30];   // unknown: assume expensive
 
 const $ = s => document.querySelector(s);
@@ -370,7 +375,7 @@ const S = Object.assign({ theme: 'system', voice: 'coral', about: '', style: '',
   model: '', effort: 'low', models: [], researchModel: '' }, store.get('gptlab.settings', {}));
 const saveS = () => store.set('gptlab.settings', S);
 // one-time move of students who already logged in onto the new faster defaults
-if (S.defaultsV !== 2){ S.model = ''; S.effort = 'low'; S.defaultsV = 2; saveS(); }
+if ((S.defaultsV || 0) < 3){ if (S.defaultsV !== 2 || !PRICES[S.model] || PRICES[S.model][2] > MAX_OUTPUT_PRICE) S.model = ''; S.effort = 'low'; S.defaultsV = 3; saveS(); }
 const caps = { stream: true, summary: true, noReasoning: [] };   // switched off automatically if the org/model doesn't allow it
 const sentContent = new WeakMap();               // user message -> exact content sent (images etc.), this session only
 
@@ -427,8 +432,10 @@ async function loadModels(strict){
   let ids = all.filter(id => /^(gpt-|o\d)/.test(id) &&
     !/audio|realtime|live|tts|transcribe|image|embed|search|instruct|codex|moderation|chat|pro|nano|-\d{4}-\d{2}-\d{2}$|0\d{3}$|16k/.test(id) &&
     !/^gpt-(3\.5|4)(-turbo)?$|^gpt-3\.5|^o1/.test(id));
+  ids = ids.filter(id => PRICES[id] && PRICES[id][2] <= MAX_OUTPUT_PRICE);
   if (!ids.length) ids = FALLBACK_MODELS.slice();
-  ids.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+  // cheapest first, so the default and the safe choices sit at the top
+  ids.sort((a, b) => (PRICES[a]?.[2] ?? 99) - (PRICES[b]?.[2] ?? 99) || b.localeCompare(a, undefined, { numeric: true }));
   S.models = ids;
   // dedicated deep-research models if the key has them; otherwise the chat model researches with web search
   const dr = all.filter(id => /deep-research$/.test(id));
@@ -448,8 +455,9 @@ function renderModel(){
   menu.insertAdjacentHTML('beforeend', '<div class="label">모델</div>');
   for (const id of S.models){
     const b = document.createElement('button'); b.className = 'item';
-    b.innerHTML = `<span></span><span class="chk">${id === S.model ? '✓' : ''}</span>`;
-    b.firstChild.textContent = id;
+    const [tier, cls] = tierOf(id);
+    b.innerHTML = `<span></span><span class="tier ${cls}">${tier}</span><span class="chk">${id === S.model ? '✓' : ''}</span>`;
+    b.firstChild.textContent = id + (id === PREFERRED_MODELS[0] ? ' (기본)' : '');
     b.onclick = () => { S.model = id; saveS(); renderModel(); closePops(); };
     menu.appendChild(b);
   }
