@@ -303,7 +303,8 @@ const VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'ony
 const FALLBACK_MODELS = ['gpt-5.1', 'gpt-5', 'gpt-5-mini', 'gpt-4.1', 'gpt-4o'];
 const EFFORTS = [['low', '빠르게'], ['medium', '보통'], ['high', '깊게 생각']];
 const BUDGET_DEFAULT = 10;                       // dollars given to each student key
-const PREFERRED_MODELS = ['gpt-6.1-sol', 'gpt-5.5', 'gpt-5.4'];
+// fast and cheap enough for 40 students at once (2x faster than gpt-6.1-sol, 2.5x cheaper, 10M TPM org limit)
+const PREFERRED_MODELS = ['gpt-5.4-mini', 'gpt-6.1-sol', 'gpt-5.5'];
 // USD per 1M tokens [input, cached input, output] — developers.openai.com/api/docs/pricing (2026-11)
 const PRICES = {
   'gpt-6-astra': [10, 1, 50], 'gpt-6.1-sol': [2, 0.1, 10], 'gpt-6.1-terra': [1, 0.05, 5], 'gpt-6-sol': [2, 0.2, 10], 'gpt-6-luna': [0.1, 0.01, 0.5],
@@ -327,8 +328,10 @@ let apiKey = store.get('gptlab.key', '');
 let convs = store.get('gptlab.convs', []);
 let memories = store.get('gptlab.memories', []);
 const S = Object.assign({ theme: 'system', voice: 'coral', about: '', style: '', memory: true, code: true, web: true,
-  model: '', effort: 'medium', models: [], researchModel: '' }, store.get('gptlab.settings', {}));
+  model: '', effort: 'low', models: [], researchModel: '' }, store.get('gptlab.settings', {}));
 const saveS = () => store.set('gptlab.settings', S);
+// one-time move of students who already logged in onto the new faster defaults
+if (S.defaultsV !== 2){ S.model = ''; S.effort = 'low'; S.defaultsV = 2; saveS(); }
 const caps = { stream: true, summary: true, noReasoning: [] };   // switched off automatically if the org/model doesn't allow it
 const sentContent = new WeakMap();               // user message -> exact content sent (images etc.), this session only
 
@@ -682,9 +685,21 @@ function renderExtras(d, m){
   }
   if (m.usage){ const u = document.createElement('div'); u.className = 'usage'; u.textContent = `${m.model} · 입력 ${m.usage.input_tokens.toLocaleString()} / 출력 ${m.usage.output_tokens.toLocaleString()} 토큰`; ex.appendChild(u); }
 }
-async function fetchContainerFile(file){ return (await api(`/containers/${file.cid}/files/${file.fid}/content`)).blob(); }
+// the content endpoint takes 1-2 s even for small files, so files are fetched once (prefetched when an answer
+// finishes) and reused for previews and download clicks
+const fileCache = new Map();
+function fetchContainerFile(file){
+  if (!fileCache.has(file.fid)){
+    const p = api(`/containers/${file.cid}/files/${file.fid}/content`).then(r => r.blob());
+    p.catch(() => fileCache.delete(file.fid));
+    fileCache.set(file.fid, p);
+  }
+  return fileCache.get(file.fid);
+}
 async function downloadFile(file, btn){
-  const old = btn.style.opacity; btn.style.opacity = .5;
+  const old = btn.style.opacity, label = btn.lastChild?.textContent;
+  btn.style.opacity = .6;
+  if (btn.classList.contains('file') && btn.lastChild) btn.lastChild.textContent = '받는 중...';
   try{
     const url = URL.createObjectURL(await fetchContainerFile(file));
     const a = document.createElement('a'); a.href = url; a.download = file.name; a.click();
@@ -695,6 +710,7 @@ async function downloadFile(file, btn){
       : '다운로드 실패: ' + friendly(e));
   }
   btn.style.opacity = old;
+  if (btn.classList.contains('file') && btn.lastChild && label) btn.lastChild.textContent = label;
 }
 async function previewImage(file, ex, before){
   try{
@@ -882,6 +898,19 @@ document.addEventListener('dragleave', e => { if (!e.relatedTarget) boxEl.classL
 document.addEventListener('drop', e => { e.preventDefault(); boxEl.classList.remove('drag'); if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
 
 /* ================= Python sandbox (container keeps files between turns) ================= */
+// for questions, let OpenAI create a sandbox only if Python is actually used ("auto"); reuse it while it is alive
+function containerParam(force){
+  const alive = current.containerId && Date.now() - (current.containerUsed || 0) < 18 * 60 * 1000;
+  if (force || !alive){ current.containerId = null; return { type: 'auto' }; }
+  current.containerUsed = Date.now();
+  return current.containerId;
+}
+function sawContainer(id){
+  if (!id) return;
+  if (id !== current.containerId){ current.containerId = id; current.knownFiles = []; addCost(TOOL_COST.container); }
+  current.containerUsed = Date.now();
+}
+// uploads need a sandbox up front, so one is created explicitly
 async function ensureContainer(force){
   const stale = Date.now() - (current.containerUsed || 0) > 18 * 60 * 1000;
   if (!current.containerId || stale || force){
@@ -1011,7 +1040,8 @@ async function send(opts){
     m.error = e.name === 'AbortError' ? '(중단됨)' : friendly(e);
   }
   status.remove();
-  if (useCode){ current.containerUsed = Date.now(); m.files.push(...(await newContainerFiles()).filter(f => !m.files.some(x => x.fid === f.fid))); }
+  if (useCode){ m.files.push(...(await newContainerFiles()).filter(f => !m.files.some(x => x.fid === f.fid))); }
+  m.files.forEach(f => fetchContainerFile(f).catch(() => {}));   // prefetch so the download click is instant
   if (m._plots && !m.files.some(f => /\.(png|jpe?g|gif|webp)$/i.test(f.name))) m.images.push(m._plots[m._plots.length - 1]);
   delete m._plots;
   m.responseId = current.lastResponseId;
@@ -1033,7 +1063,7 @@ function finishAssistantHandlers(d, pm){
 async function respond(inputItems, ctx, { useCode, useMode }){
   const build = async (newContainer) => {
     const tools = [];
-    if (useCode) tools.push({ type: 'code_interpreter', container: await ensureContainer(newContainer) });
+    if (useCode) tools.push({ type: 'code_interpreter', container: containerParam(newContainer) });
     if (S.web || useMode === 'search') tools.push({ type: 'web_search' });
     if (useMode === 'image') tools.push({ type: 'image_generation' });
     if (S.memory) tools.push(MEMORY_TOOL);
@@ -1131,6 +1161,7 @@ function itemDone(it, ctx, full){
     const t = (it.summary || []).map(s => s.text).join('\n\n');
     if (t) m.reasoning += (m.reasoning ? '\n\n' : '') + t;
   } else if (it.type === 'code_interpreter_call'){
+    sawContainer(it.container_id);
     // all Python runs of one answer go into a single collapsible row
     const logs = (it.outputs || []).filter(o => o.type === 'logs').map(o => o.logs).join('\n');
     let tool = m.tools.find(t => t.py);
