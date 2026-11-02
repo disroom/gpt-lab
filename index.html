@@ -153,6 +153,24 @@ details.think .tbody{border-left:2px solid var(--line);padding:2px 0 2px 12px;ma
 #micBtn.rec{background:var(--danger);color:#fff;animation:pulse 1s infinite}
 #plusMenu{bottom:56px;left:6px}
 #hint{max-width:768px;margin:6px auto 0;text-align:center;font-size:12px;color:var(--muted)}
+#exportBtn{border:1px solid var(--line);background:none;border-radius:999px;padding:5px 14px;font-size:13px;display:none}
+#exportBtn:hover{background:var(--hover)}
+#exportMenu{top:48px;right:12px;min-width:300px}
+#longBanner{max-width:768px;margin:0 auto 8px;display:none;align-items:center;gap:8px;flex-wrap:wrap;background:var(--accent-soft);border-radius:14px;padding:8px 12px;font-size:13px}
+#longBanner.show{display:flex}
+#longBanner span{flex:1;min-width:200px}
+#longBanner button{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:4px 12px;font-size:13px}
+#longBanner button.pri{background:var(--text);color:var(--bg);border-color:var(--text)}
+details.carry{background:var(--accent-soft);border-radius:14px;padding:10px 14px;margin:8px 0 18px;font-size:14px}
+details.carry summary{cursor:pointer;color:var(--accent);font-weight:600}
+details.carry .tbody{margin-top:8px}
+@media print{
+  #side,#top,#composer,.acts,.runbar,.copy,.pop,#runner,.overlay,#login{display:none!important}
+  body,#main,#chat{display:block;overflow:visible;height:auto;background:#fff;color:#000}
+  #msgs{max-width:none;padding:0}
+  .bubble{background:#f0f0f0}
+  details{display:block} details>*{display:block}
+}
 
 /* ----- streamlit runner ----- */
 .runbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:-4px 0 12px}
@@ -219,8 +237,14 @@ details.think .tbody{border-left:2px solid var(--line);padding:2px 0 2px 12px;ma
   <div id="top">
     <button id="menuBtn">☰</button>
     <button id="modelBtn"><b>GPT 실습실</b> <span class="m" id="modelName"></span> ▾</button>
+    <div style="flex:1"></div>
+    <button id="exportBtn" title="이 대화를 파일로 저장">⬇ 대화 저장</button>
   </div>
   <div class="pop" id="modelMenu"></div>
+  <div class="pop" id="exportMenu">
+    <button class="item" data-exp="doc">📄 워드 파일로 저장<span class="desc" style="margin-left:auto">.doc</span></button>
+    <button class="item" data-exp="pdf">🖨 PDF로 저장 (인쇄 창에서 "PDF로 저장")</button>
+  </div>
 
   <div id="chat"><div id="msgs"></div></div>
 
@@ -240,6 +264,11 @@ details.think .tbody{border-left:2px solid var(--line);padding:2px 0 2px 12px;ma
         <button class="item" data-act="research">🔭 딥 리서치<span class="desc" style="margin-left:auto">오래 걸림·비쌈</span></button>
         <button class="item" data-act="search">🌐 웹 검색</button>
       </div>
+    </div>
+    <div id="longBanner">
+      <span>💡 대화가 길어져서 답이 느려지고 비용도 커지고 있어요.</span>
+      <button class="pri" id="carryBtn">요약해서 새 채팅으로 이어가기</button>
+      <button id="carryNo">그냥 계속</button>
     </div>
     <div id="hint">AI는 실수를 할 수 있습니다. 중요한 정보는 확인하세요.</div>
   </div>
@@ -733,6 +762,16 @@ $('#search').oninput = renderList;
 function renderAll(){
   renderList();
   const box = $('#msgs'); box.innerHTML = '';
+  $('#exportBtn').style.display = current.messages.length ? 'block' : 'none';
+  $('#longBanner').classList.remove('show');
+  if (current.carry){
+    box.innerHTML = '<details class="carry"><summary>📎 이전 대화 요약을 이어받았어요 (눌러서 보기)</summary><div class="tbody"></div></details>';
+    box.querySelector('.tbody').innerHTML = renderMD(current.carry);
+  }
+  if (!current.messages.length && current.carry){
+    box.insertAdjacentHTML('beforeend', '<div class="empty" style="margin-top:8vh"><h1>이어서 물어보세요</h1><div class="small">앞 대화의 핵심을 기억한 상태로, 더 빠르고 저렴하게 이어갑니다.</div></div>');
+    return;
+  }
   if (!current.messages.length){
     box.innerHTML = `<div class="empty"><h1>무엇을 도와드릴까요?</h1>
       <div class="small">질문, 파일 분석, 엑셀·워드·PPT 만들기, 웹 검색, 이미지 생성까지 할 수 있어요.</div>
@@ -746,7 +785,7 @@ function renderAll(){
     return;
   }
   for (const m of current.messages) m.role === 'user' ? addUser(m) : addAssistant(m);
-  markLast(); scrollDown(true);
+  markLast(); scrollDown(true); checkLong();
 }
 function markLast(){
   document.querySelectorAll('.msg.last').forEach(x => x.classList.remove('last'));
@@ -927,6 +966,55 @@ async function shrinkImage(src, max = 1024){
   }catch{}
   return src.length < 400000 ? src : '';   // too big to keep and could not be shrunk
 }
+
+/* ================= export a chat (Word .doc / print to PDF) ================= */
+$('#exportBtn').onclick = ev => { ev.stopPropagation(); const o = $('#exportMenu').classList.contains('open'); closePops(); if (!o) $('#exportMenu').classList.add('open'); };
+$('#exportMenu').onclick = ev => {
+  const kind = ev.target.closest('[data-exp]')?.dataset.exp; if (!kind) return;
+  closePops();
+  if (kind === 'pdf'){ document.querySelectorAll('#msgs details').forEach(d => d.open = true); window.print(); return; }
+  const esc = t => { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; };
+  const parts = current.messages.map(m => m.role === 'user'
+    ? `<p style="background:#f0f0f0;padding:8px 12px;border-radius:8px"><b>나:</b> ${esc(m.text || '').replace(/\n/g, '<br>')}${m.files?.length ? '<br><small>📎 ' + esc(m.files.join(', ')) + '</small>' : ''}</p>`
+    : `<div><b>GPT:</b>${renderMD(m.text || '')}${(m.images || []).map(src => `<p><img src="${src}" width="420"></p>`).join('')}${m.files?.length ? '<p><small>만든 파일: ' + esc(m.files.map(f => f.name).join(', ')) + '</small></p>' : ''}</div><hr>`).join('\n');
+  const html = `<html><head><meta charset="utf-8"><title>${esc(current.title)}</title><style>body{font-family:'맑은 고딕',sans-serif;font-size:11pt;line-height:1.6}table{border-collapse:collapse}td,th{border:1px solid #999;padding:4px 8px}pre{background:#f6f8fa;padding:8px;font-family:Consolas,monospace;font-size:9.5pt;white-space:pre-wrap}.katex-mathml{display:none}</style></head>
+<body><h2>${esc(current.title)}</h2><p><small>GPT 실습실 · ${new Date().toLocaleString('ko-KR')}</small></p>${current.carry ? '<p><small>[이전 대화 요약]</small><br>' + renderMD(current.carry) + '</p><hr>' : ''}${parts}</body></html>`;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['\ufeff' + html], { type: 'application/msword' }));
+  a.download = (current.title.replace(/[\\/:*?"<>|]/g, '').slice(0, 40) || '대화') + '.doc';
+  a.click();
+};
+
+/* ================= long chats: summarize and continue in a fresh chat =================
+   every turn re-sends the whole history, so long chats get slow and expensive */
+function checkLong(){
+  const last = current.messages[current.messages.length - 1];
+  const long = (last?.usage?.input_tokens || 0) > 30000 || current.messages.length >= 24;
+  $('#longBanner').classList.toggle('show', long && !current.longDismissed && !busy);
+}
+$('#carryNo').onclick = () => { current.longDismissed = true; $('#longBanner').classList.remove('show'); save(); };
+$('#carryBtn').onclick = async () => {
+  if (busy || !current.lastResponseId) return;
+  const btn = $('#carryBtn'), label = btn.textContent;
+  btn.textContent = '요약하는 중...'; btn.disabled = true;
+  try{
+    const body = { model: S.model, previous_response_id: current.lastResponseId, store: false,
+      input: '지금까지의 대화를 새 채팅에서 이어갈 수 있도록 한국어로 요약해줘. 다음 항목만, 15줄 이내로: 1) 내가 하려는 것(목표) 2) 지금까지 정한 내용·핵심 결론 3) 올린 파일과 만든 파일, 주요 수치 결과 4) 남은 할 일. 인사말 없이 요약만.' };
+    if (isReasoning(S.model)) body.reasoning = { effort: 'low' };
+    const j = await (await api('/responses', { method: 'POST', json: body })).json();
+    const summary = (j.output || []).filter(o => o.type === 'message').flatMap(o => o.content.map(c => c.text || '')).join('\n').trim();
+    if (!summary) throw new Error('요약을 받지 못했습니다.');
+    addSpent(j.usage, S.model);
+    const from = current;
+    from.longDismissed = true;
+    newConv();
+    current.carry = summary;
+    current.title = (from.title.replace(/ \(이어서\)$/, '') + ' (이어서)').slice(0, 40);
+    if (uploads.has(from.id)) uploads.set(current.id, uploads.get(from.id));   // keep uploaded files usable for Streamlit
+    convs.unshift(current); current.updatedAt = Date.now(); save(); renderAll(); input.focus();
+  }catch(e){ alert('요약 실패: ' + friendly(e)); }
+  btn.textContent = label; btn.disabled = false;
+};
 
 /* ================= edit / regenerate ================= */
 function truncateFrom(userMsg){
@@ -1184,6 +1272,8 @@ async function send(opts){
       }
       content.unshift({ type: 'input_text', text: sentText });
     }
+    if (current.carry && !current.lastResponseId && !content[0]?.text?.startsWith('[이전 대화 요약'))
+      content.unshift({ type: 'input_text', text: '[이전 대화 요약 — 이 내용을 이어서 대화합니다]\n' + current.carry });
     userMsg.sentText = sentText; sentContent.set(userMsg, content);
 
     if (useMode === 'research') await deepResearch(content, ctx);
@@ -1216,6 +1306,8 @@ async function send(opts){
   save();
   busy = false; aborter = null; cancelBg = null; updateSend(); scrollDown();
   setTimeout(() => fetchReal(), 20000);   // give OpenAI's cost data a moment, then refresh the real amount
+  $('#exportBtn').style.display = 'block';
+  checkLong();
 }
 function finishAssistantHandlers(d, pm){
   const acts = d.querySelector('.acts'); acts.innerHTML = '';
