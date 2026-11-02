@@ -209,6 +209,9 @@ details.think .tbody{border-left:2px solid var(--line);padding:2px 0 2px 12px;ma
       <div class="ubar"><div id="usageFill"></div></div>
       <div id="usageTip"></div>
     </div>
+    <div class="small" id="syncState" style="padding:2px 10px 0">
+      
+    </div>
   </div>
 </aside>
 
@@ -369,6 +372,7 @@ $('#loginBtn').onclick = async () => {
   apiKey = k;
   try{
     await loadModels(true);
+    syncPull();
     store.set('gptlab.key', k);
     $('#login').style.display = 'none';
     $('#loginErr').textContent = '';
@@ -440,8 +444,8 @@ $('#openSettings').onclick = openSettings;
 $('#settingsModal').onclick = e => { if (e.target.id === 'settingsModal' || e.target.hasAttribute('data-close')) $('#settingsModal').classList.remove('open'); };
 $('#sTheme').onchange = e => { S.theme = e.target.value; saveS(); applyTheme(); };
 $('#sVoice').onchange = e => { S.voice = e.target.value; saveS(); };
-$('#sAbout').oninput = e => { S.about = e.target.value; saveS(); };
-$('#sStyle').oninput = e => { S.style = e.target.value; saveS(); };
+$('#sAbout').oninput = e => { S.about = e.target.value; S.prefAt = Date.now(); saveS(); schedulePush(); };
+$('#sStyle').oninput = e => { S.style = e.target.value; S.prefAt = Date.now(); saveS(); schedulePush(); };
 $('#sBudget').oninput = e => { const v = parseFloat(e.target.value); if (v > 0){ S.budget = v; saveS(); showSpent(); } };
 $('#sMemory').onchange = e => { S.memory = e.target.checked; saveS(); };
 $('#sCode').onchange = e => { S.code = e.target.checked; saveS(); };
@@ -453,15 +457,15 @@ function renderMemories(){
     const d = document.createElement('div'); d.className = 'mem';
     d.innerHTML = '<span></span><button>삭제</button>';
     d.firstChild.textContent = t;
-    d.lastChild.onclick = () => { memories.splice(i, 1); store.set('gptlab.memories', memories); renderMemories(); };
+    d.lastChild.onclick = () => { memories.splice(i, 1); store.set('gptlab.memories', memories); S.memAt = Date.now(); saveS(); schedulePush(); renderMemories(); };
     box.appendChild(d);
   });
 }
 $('#resetSpent').onclick = () => { store.del('gptlab.spent'); showSpent(); };
-$('#clearChats').onclick = () => { if (!confirm('모든 대화 기록을 삭제할까요?')) return; convs = []; save(); newConv(); };
+$('#clearChats').onclick = () => { if (!confirm('모든 대화 기록을 삭제할까요? (다른 PC에서도 지워집니다)')) return; tombstone(convs.map(c => c.id)); convs = []; save(); newConv(); };
 $('#logout').onclick = () => {
-  if (!confirm('이 브라우저에서 API 키와 대화 기록, 메모리를 모두 지울까요?')) return;
-  ['gptlab.key', 'gptlab.convs', 'gptlab.memories', 'gptlab.settings', 'gptlab.spent'].forEach(store.del);
+  if (!confirm('이 컴퓨터에서 API 키와 대화 기록을 지울까요?\n(대화 기록은 내 키에 안전하게 저장돼 있어서, 다시 키를 넣으면 돌아옵니다)')) return;
+  ['gptlab.key', 'gptlab.convs', 'gptlab.memories', 'gptlab.settings', 'gptlab.spent', 'gptlab.spentOthers', 'gptlab.tomb', 'gptlab.device'].forEach(store.del);
   location.reload();
 };
 /* ---- spending estimate (this browser only; the OpenAI dashboard is the real number) ---- */
@@ -480,16 +484,123 @@ function addSpent(u, model){
 }
 function addCost(usd){ const s = getSpent(); s.usd += usd; store.set('gptlab.spent', s); showSpent(); }
 const money = v => '$' + v.toFixed(v < 10 ? 2 : 1);
+// spending of this key on other PCs, filled in by sync: { deviceId: { in, out, usd } }
+const deviceId = store.get('gptlab.device', '') || (() => { const id = Math.random().toString(36).slice(2, 10); store.set('gptlab.device', id); return id; })();
+function totalSpent(){
+  const t = { ...getSpent() }, others = store.get('gptlab.spentOthers', {});
+  for (const [id, o] of Object.entries(others)) if (id !== deviceId){ t.in += o.in || 0; t.out += o.out || 0; t.usd += o.usd || 0; }
+  t.devices = 1 + Object.keys(others).filter(id => id !== deviceId).length;
+  return t;
+}
 function showSpent(){
-  const s = getSpent(), budget = S.budget || BUDGET_DEFAULT;
+  const s = totalSpent(), budget = S.budget || BUDGET_DEFAULT;
   const pct = Math.min(100, s.usd / budget * 100), left = Math.max(0, budget - s.usd);
   const bar = $('#usageFill');
   bar.style.width = Math.max(pct, s.usd > 0 ? 1.5 : 0) + '%';
   bar.style.background = pct >= 90 ? 'var(--danger)' : pct >= 70 ? '#f59e0b' : 'var(--ok)';
   $('#usageLabel').textContent = `${money(s.usd)} / ${money(budget)} 사용`;
   $('#usageTip').innerHTML = `<b>사용: ${money(s.usd)}</b> (${pct.toFixed(1)}%)<br><b>남음: ${money(left)}</b><br>` +
-    `<span class="small">입력 ${s.in.toLocaleString()} · 출력 ${s.out.toLocaleString()} 토큰<br>이 컴퓨터에서 쓴 양으로 계산한 추정치예요. 다른 PC에서 쓴 양은 빠져 있어요.</span>`;
-  $('#sSpent').textContent = `추정 사용액 ${money(s.usd)} / ${money(budget)} (이 PC 기준)`;
+    `<span class="small">입력 ${s.in.toLocaleString()} · 출력 ${s.out.toLocaleString()} 토큰<br>이 키로 쓴 ${s.devices > 1 ? s.devices + '대 기기의 사용량을 합쳐' : '사용량으로'} 계산한 추정치예요. 정확한 금액은 조교가 확인할 수 있어요.</span>`;
+  $('#sSpent').textContent = `추정 사용액 ${money(s.usd)} / ${money(budget)}`;
+}
+
+/* ================= history sync across PCs =================
+   Chats, memory and custom instructions are kept in ONE file inside the student's own OpenAI project
+   (files of purpose "evals" can be read back; "user_data" cannot). The file is AES-GCM encrypted with a key
+   derived from the API key, so even keys that share a project cannot read each other's history. */
+const SYNC = { name: '', key: null, timer: 0, pulled: 0, running: null };
+const te = new TextEncoder(), td = new TextDecoder();
+const b64 = buf => { let s = ''; const b = new Uint8Array(buf); for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000)); return btoa(s); };
+const unb64 = str => Uint8Array.from(atob(str), c => c.charCodeAt(0));
+async function syncInit(){
+  if (SYNC.key) return;
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', te.encode('gptlab-id:' + apiKey)));
+  SYNC.name = 'gptlab-history-' + [...h.slice(0, 6)].map(x => x.toString(16).padStart(2, '0')).join('') + '.jsonl';
+  const raw = await crypto.subtle.digest('SHA-256', te.encode('gptlab-sync:' + apiKey));
+  SYNC.key = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
+}
+function syncState(t){ const el = $('#syncState'); if (el) el.textContent = t; }
+async function cloudFiles(){
+  const j = await (await api('/files?purpose=evals&limit=100')).json();
+  return j.data.filter(f => f.filename === SYNC.name).sort((a, b) => b.created_at - a.created_at);
+}
+async function cloudRead(){
+  const files = await cloudFiles();
+  if (!files.length) return { files, data: null };
+  const line = (await (await api(`/files/${files[0].id}/content`)).text()).split('\n')[0];
+  const { item } = JSON.parse(line);
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(item.iv) }, SYNC.key, unb64(item.data));
+  return { files, data: JSON.parse(td.decode(plain)) };
+}
+function merge(p){
+  if (!p) return false;
+  let changed = false;
+  const tomb = { ...(p.tomb || {}), ...store.get('gptlab.tomb', {}) };
+  for (const [id, t] of Object.entries(p.tomb || {})) tomb[id] = Math.max(t, tomb[id] || 0);
+  store.set('gptlab.tomb', tomb);
+  const byId = new Map(convs.map(c => [c.id, c]));
+  for (const rc of p.convs || []){
+    if (tomb[rc.id]) continue;
+    const lc = byId.get(rc.id);
+    if (!lc || (rc.updatedAt || 0) > (lc.updatedAt || 0)){ byId.set(rc.id, rc); changed = true; }
+  }
+  for (const id of Object.keys(tomb)) if (byId.delete(id)) changed = true;
+  convs = [...byId.values()].sort((a, b) => (b.updatedAt || parseInt(b.id, 36)) - (a.updatedAt || parseInt(a.id, 36)));
+  if ((p.memAt || 0) > (S.memAt || 0)){ memories = p.memories || []; store.set('gptlab.memories', memories); S.memAt = p.memAt; changed = true; }
+  if ((p.prefAt || 0) > (S.prefAt || 0)){ S.about = p.about || ''; S.style = p.style || ''; S.prefAt = p.prefAt; changed = true; }
+  saveS();
+  const others = store.get('gptlab.spentOthers', {});
+  for (const [id, o] of Object.entries(p.spent || {})) if (id !== deviceId && (!others[id] || o.usd >= others[id].usd)) others[id] = o;
+  store.set('gptlab.spentOthers', others);
+  store.set('gptlab.convs', convs);
+  return changed;
+}
+function payload(){
+  const others = store.get('gptlab.spentOthers', {});
+  return { v: 1, savedAt: Date.now(), convs, tomb: store.get('gptlab.tomb', {}), memories, memAt: S.memAt || 0,
+    about: S.about, style: S.style, prefAt: S.prefAt || 0, spent: { ...others, [deviceId]: getSpent() } };
+}
+// never swap the conversation objects while an answer is streaming into one of them
+async function syncPull(){
+  if (!apiKey || busy) return;
+  if (SYNC.running) return SYNC.running;
+  SYNC.running = (async () => {
+    try{
+      await syncInit(); syncState('☁ 대화 기록 불러오는 중...');
+      const { data } = await cloudRead();
+      if (busy) return;
+      const curId = current?.id;
+      if (merge(data)){
+        const fresh = convs.find(c => c.id === curId);
+        if (fresh && fresh !== current){ current = fresh; renderAll(); } else renderList();
+      }
+      showSpent(); SYNC.pulled = Date.now();
+      syncState('☁ 다른 PC와 대화 기록 동기화됨');
+    }catch(e){ syncState('☁ 동기화 실패 (이 PC에는 저장돼 있어요)'); console.warn('sync pull', e); }
+    finally{ SYNC.running = null; }
+  })();
+  return SYNC.running;
+}
+function schedulePush(){ clearTimeout(SYNC.timer); SYNC.timer = setTimeout(syncPush, 2500); }
+async function syncPush(){
+  if (!apiKey) return;
+  if (busy || SYNC.running){ schedulePush(); return; }
+  SYNC.running = (async () => {
+    try{
+      await syncInit(); syncState('☁ 저장 중...');
+      const { files, data } = await cloudRead();   // merge what other PCs saved first, then write the union
+      if (!busy) merge(data);
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, SYNC.key, te.encode(JSON.stringify(payload())));
+      const fd = new FormData(); fd.append('purpose', 'evals');
+      fd.append('file', new Blob([JSON.stringify({ item: { v: 1, iv: b64(iv), data: b64(ct) } }) + '\n'], { type: 'application/jsonl' }), SYNC.name);
+      await api('/files', { method: 'POST', body: fd });
+      for (const f of files) api(`/files/${f.id}`, { method: 'DELETE' }).catch(() => {});
+      SYNC.pulled = Date.now();
+      syncState('☁ 다른 PC와 대화 기록 동기화됨');
+    }catch(e){ syncState('☁ 동기화 실패 (이 PC에는 저장돼 있어요)'); console.warn('sync push', e); }
+    finally{ SYNC.running = null; }
+  })();
 }
 
 /* ================= markdown ================= */
@@ -557,6 +668,12 @@ function plainText(m){
 function save(){
   while (!store.set('gptlab.convs', convs) && convs.length > 1) convs.pop();   // storage full: drop oldest chats
   renderList();
+  schedulePush();
+}
+function tombstone(ids){
+  const t = store.get('gptlab.tomb', {});
+  for (const id of ids) t[id] = Date.now();
+  store.set('gptlab.tomb', t);
 }
 function newConv(){
   current = { id: Date.now().toString(36), title: '새 채팅', messages: [], lastResponseId: null, containerId: null, containerUsed: 0, knownFiles: [] };
@@ -576,7 +693,7 @@ function renderList(){
     d.querySelector('.del').onclick = ev => {
       ev.stopPropagation();
       if (!confirm('이 대화를 삭제할까요?')) return;
-      convs = convs.filter(x => x.id !== c.id); save();
+      tombstone([c.id]); convs = convs.filter(x => x.id !== c.id); save();
       if (current?.id === c.id) newConv();
     };
     $('#convList').appendChild(d);
@@ -957,7 +1074,7 @@ function runFunction(call, ctx){
   if (call.name === 'save_memory'){
     let fact = '';
     try{ fact = JSON.parse(call.arguments).memory; }catch{}
-    if (fact && !memories.includes(fact)){ memories.push(fact); store.set('gptlab.memories', memories); }
+    if (fact && !memories.includes(fact)){ memories.push(fact); store.set('gptlab.memories', memories); S.memAt = Date.now(); saveS(); }
     const t = { label: '🧠 메모리 업데이트됨: ' + fact }; ctx.m.tools.push(t); addTool(ctx.d, t);
     return '저장 완료';
   }
@@ -1049,6 +1166,7 @@ async function send(opts){
   const persisted = { ...m, images: [] };
   if (m.images.length) persisted.text += '\n\n*(생성된 이미지는 새로고침하면 사라집니다. 필요하면 저장해두세요)*';
   current.messages[current.messages.length] = persisted;
+  current.updatedAt = Date.now();
   // keep the live DOM pointing at the stored object so regenerate/copy use it
   finishAssistantHandlers(d, persisted);
   save();
@@ -1243,7 +1361,8 @@ $('#newChat').onclick = () => { newConv(); document.body.classList.remove('side-
 $('#menuBtn').onclick = ev => { ev.stopPropagation(); document.body.classList.toggle('side-open'); };
 $('#chat').onclick = () => document.body.classList.remove('side-open');
 applyTheme(); showSpent(); renderModel(); newConv();
-if (!apiKey) showLogin(); else loadModels(false);
+if (!apiKey) showLogin(); else { loadModels(false); syncPull(); }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && Date.now() - SYNC.pulled > 30000) syncPull(); });
 </script>
 </body>
 </html>
