@@ -915,18 +915,17 @@ parent.postMessage({ type: 'stlite-ready' }, '*');
 }
 $('#runClose').onclick = () => { $('#runner').classList.remove('open'); $('#runFrame').srcdoc = ''; };
 
-function shrinkImage(src, max = 1024){
-  return new Promise(ok => {
-    const img = new Image();
-    img.onload = () => {
-      const k = Math.min(1, max / Math.max(img.width, img.height));
-      const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
-      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-      try{ ok(c.toDataURL('image/jpeg', 0.82)); }catch{ ok(src); }
-    };
-    img.onerror = () => ok(src);
-    img.src = src;
-  });
+// decode via createImageBitmap (an <img> in a background tab can report 0×0 and give an empty canvas)
+async function shrinkImage(src, max = 1024){
+  try{
+    const bmp = await createImageBitmap(await (await fetch(src)).blob());
+    const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
+    const c = document.createElement('canvas'); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    const out = c.toDataURL('image/jpeg', 0.82);
+    if (out.length > 1000) return out;
+  }catch{}
+  return src.length < 400000 ? src : '';   // too big to keep and could not be shrunk
 }
 
 /* ================= edit / regenerate ================= */
@@ -1209,7 +1208,7 @@ async function send(opts){
   m.responseId = current.lastResponseId;
   finishAssistant(d, m); markLast();
   // full-size images are megabytes; keep a compressed copy so they survive reloads and sync to other PCs
-  const persisted = { ...m, images: await Promise.all(m.images.map(shrinkImage)) };
+  const persisted = { ...m, images: (await Promise.all(m.images.map(src => shrinkImage(src)))).filter(Boolean) };
   current.messages[current.messages.length] = persisted;
   current.updatedAt = Date.now();
   // keep the live DOM pointing at the stored object so regenerate/copy use it
