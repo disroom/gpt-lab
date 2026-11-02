@@ -772,11 +772,11 @@ function renderAll(){
   const box = $('#msgs'); box.innerHTML = '';
   $('#exportBtn').style.display = current.messages.length ? 'block' : 'none';
   $('#longBanner').classList.remove('show');
-  if (current.carry){
+  if (current.carry && current.carryKind !== 'compact'){
     box.innerHTML = '<details class="carry"><summary>📎 이전 대화 요약을 이어받았어요 (눌러서 보기)</summary><div class="tbody"></div></details>';
     box.querySelector('.tbody').innerHTML = renderMD(current.carry);
   }
-  if (!current.messages.length && current.carry){
+  if (!current.messages.length && current.carry && current.carryKind !== 'compact'){
     box.insertAdjacentHTML('beforeend', '<div class="empty" style="margin-top:8vh"><h1>이어서 물어보세요</h1><div class="small">앞 대화의 핵심을 기억한 상태로, 더 빠르고 저렴하게 이어갑니다.</div></div>');
     return;
   }
@@ -997,8 +997,32 @@ $('#exportMenu').onclick = ev => {
    every turn re-sends the whole history, so long chats get slow and expensive */
 function checkLong(){
   const last = current.messages[current.messages.length - 1];
-  const long = (last?.usage?.input_tokens || 0) > 30000 || current.messages.length >= 24;
+  const long = current.messages.length >= 30;
   $('#longBanner').classList.toggle('show', long && !current.longDismissed && !busy);
+}
+const COMPACT_AT = 60000;   // tokens re-sent per question; OpenAI doubles the price above 272k, and cost grows with every turn
+async function summarizeChain(){
+  const body = { model: S.model, previous_response_id: current.lastResponseId, store: false,
+    input: '지금까지의 대화를 이어갈 수 있도록 한국어로 요약해줘. 다음 항목만, 15줄 이내로: 1) 내가 하려는 것(목표) 2) 지금까지 정한 내용·핵심 결론 3) 올린 파일과 만든 파일(이름과 /mnt/data 경로), 주요 수치 결과 4) 남은 할 일. 인사말 없이 요약만.' };
+  if (isReasoning(S.model)) body.reasoning = { effort: 'low' };
+  const j = await (await api('/responses', { method: 'POST', json: body })).json();
+  const summary = (j.output || []).filter(o => o.type === 'message').flatMap(o => o.content.map(c => c.text || '')).join('\n').trim();
+  if (!summary) throw new Error('요약을 받지 못했습니다.');
+  addSpent(j.usage, S.model);
+  return summary;
+}
+// before a question would re-send a huge history, swap the history for a short summary (same chat on screen)
+async function compactIfLong(m, d, setStatus){
+  if (!current.lastResponseId || (current.ctxTokens || 0) < COMPACT_AT) return;
+  setStatus('대화가 길어서 앞부분을 요약해 정리하는 중... (속도·비용 절약)');
+  try{
+    const summary = await summarizeChain();
+    current.carry = summary; current.carryKind = 'compact';
+    current.lastResponseId = null; current.ctxTokens = 0;
+    const t = { label: '🧹 대화가 길어서 앞부분을 요약해 정리함 (속도·비용 절약)', detail: summary };
+    m.tools.push(t); addTool(d, t);
+  }catch{}   // if summarizing fails, just carry on with the full history
+  setStatus('생각 중...');
 }
 $('#carryNo').onclick = () => { current.longDismissed = true; $('#longBanner').classList.remove('show'); save(); };
 $('#carryBtn').onclick = async () => {
@@ -1006,17 +1030,11 @@ $('#carryBtn').onclick = async () => {
   const btn = $('#carryBtn'), label = btn.textContent;
   btn.textContent = '요약하는 중...'; btn.disabled = true;
   try{
-    const body = { model: S.model, previous_response_id: current.lastResponseId, store: false,
-      input: '지금까지의 대화를 새 채팅에서 이어갈 수 있도록 한국어로 요약해줘. 다음 항목만, 15줄 이내로: 1) 내가 하려는 것(목표) 2) 지금까지 정한 내용·핵심 결론 3) 올린 파일과 만든 파일, 주요 수치 결과 4) 남은 할 일. 인사말 없이 요약만.' };
-    if (isReasoning(S.model)) body.reasoning = { effort: 'low' };
-    const j = await (await api('/responses', { method: 'POST', json: body })).json();
-    const summary = (j.output || []).filter(o => o.type === 'message').flatMap(o => o.content.map(c => c.text || '')).join('\n').trim();
-    if (!summary) throw new Error('요약을 받지 못했습니다.');
-    addSpent(j.usage, S.model);
+    const summary = await summarizeChain();
     const from = current;
     from.longDismissed = true;
     newConv();
-    current.carry = summary;
+    current.carry = summary; current.carryKind = 'new';
     current.title = (from.title.replace(/ \(이어서\)$/, '') + ' (이어서)').slice(0, 40);
     if (uploads.has(from.id)) uploads.set(current.id, uploads.get(from.id));   // keep uploaded files usable for Streamlit
     convs.unshift(current); current.updatedAt = Date.now(); save(); renderAll(); input.focus();
@@ -1261,6 +1279,7 @@ async function send(opts){
   d.insertBefore(status, d.querySelector('.body'));
   setStatus('생각 중...');
   const ctx = { m, d, setStatus, start: Date.now(), calls: [] };
+  if (useMode !== 'research') await compactIfLong(m, d, setStatus);
 
   const useCode = (S.code || files.some(f => f.kind === 'data')) && useMode !== 'research';
   try{
@@ -1413,6 +1432,7 @@ function handleEvent(ev, ctx){
   }
 }
 function addUsage(m, u){
+  if (u?.input_tokens) current.ctxTokens = u.input_tokens;
   if (!u) return;
   m.usage = { input_tokens: (m.usage?.input_tokens || 0) + (u.input_tokens || 0), output_tokens: (m.usage?.output_tokens || 0) + (u.output_tokens || 0) };
   addSpent(u, m.model);
