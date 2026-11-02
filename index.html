@@ -204,7 +204,7 @@ details.think .tbody{border-left:2px solid var(--line);padding:2px 0 2px 12px;ma
   <div id="convList"></div>
   <div id="sideBottom">
     <button class="sbtn" id="openSettings">⚙️ 설정</button>
-    <div id="usage" tabindex="0">
+    <div id="usage" tabindex="0" onmouseenter="fetchReal()">
       <div class="urow"><span>💳 사용량</span><span id="usageLabel"></span></div>
       <div class="ubar"><div id="usageFill"></div></div>
       <div id="usageTip"></div>
@@ -372,7 +372,7 @@ $('#loginBtn').onclick = async () => {
   apiKey = k;
   try{
     await loadModels(true);
-    syncPull();
+    syncPull(); fetchReal(true);
     store.set('gptlab.key', k);
     $('#login').style.display = 'none';
     $('#loginErr').textContent = '';
@@ -465,7 +465,7 @@ $('#resetSpent').onclick = () => { store.del('gptlab.spent'); showSpent(); };
 $('#clearChats').onclick = () => { if (!confirm('모든 대화 기록을 삭제할까요? (다른 PC에서도 지워집니다)')) return; tombstone(convs.map(c => c.id)); convs = []; save(); newConv(); };
 $('#logout').onclick = () => {
   if (!confirm('이 컴퓨터에서 API 키와 대화 기록을 지울까요?\n(대화 기록은 내 키에 안전하게 저장돼 있어서, 다시 키를 넣으면 돌아옵니다)')) return;
-  ['gptlab.key', 'gptlab.convs', 'gptlab.memories', 'gptlab.settings', 'gptlab.spent', 'gptlab.spentOthers', 'gptlab.tomb', 'gptlab.device'].forEach(store.del);
+  ['gptlab.key', 'gptlab.convs', 'gptlab.memories', 'gptlab.settings', 'gptlab.spent', 'gptlab.spentOthers', 'gptlab.tomb', 'gptlab.device', 'gptlab.real'].forEach(store.del);
   location.reload();
 };
 /* ---- spending estimate (this browser only; the OpenAI dashboard is the real number) ---- */
@@ -492,16 +492,39 @@ function totalSpent(){
   t.devices = 1 + Object.keys(others).filter(id => id !== deviceId).length;
   return t;
 }
+/* ---- real spend from OpenAI via the usage relay (admin key lives only on that server) ----
+   OpenAI's cost data lags by minutes, so the bar shows: real amount + what this page estimated since then */
+const USAGE_API = 'https://gptlab-usage.gpt-lab-usage.workers.dev/usage';
+let real = store.get('gptlab.real', null);   // { usd, at, base } base = local estimate at the time of the check
+let realBusy = false;
+async function fetchReal(force){
+  if (!apiKey || !USAGE_API.startsWith('https://') || realBusy) return;
+  if (!force && real && Date.now() - real.at < 60 * 1000) return;
+  realBusy = true;
+  try{
+    const r = await fetch(USAGE_API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: apiKey }) });
+    if (r.ok){
+      const j = await r.json();
+      real = { usd: j.usd, at: Date.now(), base: totalSpent().usd };
+      store.set('gptlab.real', real); showSpent();
+    }
+  }catch{}
+  realBusy = false;
+}
 function showSpent(){
   const s = totalSpent(), budget = S.budget || BUDGET_DEFAULT;
+  const live = real ? real.usd + Math.max(0, s.usd - real.base) : null;
+  if (live !== null) s.usd = live;
   const pct = Math.min(100, s.usd / budget * 100), left = Math.max(0, budget - s.usd);
   const bar = $('#usageFill');
   bar.style.width = Math.max(pct, s.usd > 0 ? 1.5 : 0) + '%';
   bar.style.background = pct >= 90 ? 'var(--danger)' : pct >= 70 ? '#f59e0b' : 'var(--ok)';
   $('#usageLabel').textContent = `${money(s.usd)} / ${money(budget)} 사용`;
   $('#usageTip').innerHTML = `<b>사용: ${money(s.usd)}</b> (${pct.toFixed(1)}%)<br><b>남음: ${money(left)}</b><br>` +
-    `<span class="small">입력 ${s.in.toLocaleString()} · 출력 ${s.out.toLocaleString()} 토큰<br>이 키로 쓴 ${s.devices > 1 ? s.devices + '대 기기의 사용량을 합쳐' : '사용량으로'} 계산한 추정치예요. 정확한 금액은 조교가 확인할 수 있어요.</span>`;
-  $('#sSpent').textContent = `추정 사용액 ${money(s.usd)} / ${money(budget)}`;
+    (live !== null
+      ? `<span class="small">OpenAI 실제 청구 금액 기준이에요. (${new Date(real.at).toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' })} 확인 · OpenAI 집계가 몇 분 늦어서 그 뒤 사용분은 추정으로 더함)</span>`
+      : `<span class="small">입력 ${s.in.toLocaleString()} · 출력 ${s.out.toLocaleString()} 토큰<br>이 키로 쓴 ${s.devices > 1 ? s.devices + '대 기기의 사용량을 합쳐' : '사용량으로'} 계산한 추정치예요. 정확한 금액은 조교가 확인할 수 있어요.</span>`);
+  $('#sSpent').textContent = `${live !== null ? '사용액' : '추정 사용액'} ${money(s.usd)} / ${money(budget)}`;
 }
 
 /* ================= history sync across PCs =================
@@ -1171,6 +1194,7 @@ async function send(opts){
   finishAssistantHandlers(d, persisted);
   save();
   busy = false; aborter = null; cancelBg = null; updateSend(); scrollDown();
+  setTimeout(() => fetchReal(), 20000);   // give OpenAI's cost data a moment, then refresh the real amount
 }
 function finishAssistantHandlers(d, pm){
   const acts = d.querySelector('.acts'); acts.innerHTML = '';
@@ -1361,7 +1385,8 @@ $('#newChat').onclick = () => { newConv(); document.body.classList.remove('side-
 $('#menuBtn').onclick = ev => { ev.stopPropagation(); document.body.classList.toggle('side-open'); };
 $('#chat').onclick = () => document.body.classList.remove('side-open');
 applyTheme(); showSpent(); renderModel(); newConv();
-if (!apiKey) showLogin(); else { loadModels(false); syncPull(); }
+if (!apiKey) showLogin(); else { loadModels(false); syncPull(); fetchReal(true); }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') fetchReal(); });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && Date.now() - SYNC.pulled > 30000) syncPull(); });
 </script>
 </body>
