@@ -297,7 +297,14 @@ details.think .tbody{border-left:2px solid var(--line);padding:2px 0 2px 12px;ma
 const API = 'https://api.openai.com/v1';
 const BASE_INSTRUCTIONS = `당신은 대학생의 공부와 과제를 돕는 친절한 한국어 AI 어시스턴트입니다.
 - 사용자가 엑셀, 워드, PDF, PPT, CSV, 이미지, 그래프 같은 파일을 원하면 Python 도구로 직접 만들어 /mnt/data/ 에 저장하세요. 화면에 다운로드 버튼이 자동으로 표시되니 "아래 버튼으로 받으세요"라고 안내하면 됩니다. 파일명은 내용을 알 수 있게 짓고, 한글이 들어가는 문서·그래프는 글꼴이 깨지지 않게 처리하세요.
-- 업로드된 파일은 /mnt/data/ 경로에 있습니다. 분석 요청이 오면 먼저 파일을 열어 구조를 확인하세요.
+- 업로드된 파일은 /mnt/data/ 경로에 있습니다.
+- 파일·분석 작업은 속도가 가장 중요합니다. Python은 보통 딱 두 번만 실행하세요.
+  1번째: 파일을 읽어 열 이름·자료형·앞 5행만 출력 (업로드 파일이 없으면 생략)
+  2번째: 분석, 그래프, 문서·엑셀 저장까지 한 코드에 모두 작성해 한 번에 실행
+  오류가 났을 때만 고쳐서 한 번 더 실행하세요.
+- /home/oai/skills 같은 설명서나 예제는 찾아보거나 읽지 말고 pandas·openpyxl·python-docx·python-pptx·matplotlib로 바로 작성하세요.
+- 만든 파일을 이미지로 렌더링하거나 다시 열어 검사하지 마세요. 저장하고 바로 답하세요.
+- matplotlib 한글은 'NanumGothic' 또는 'Noto Sans CJK KR' 중 설치된 것을 쓰고, 없으면 그냥 진행하세요.
 - 수식은 LaTeX 형식(\\( \\), \\[ \\])으로 쓰세요.
 - Streamlit 앱(웹앱, 대시보드, 추천 시스템 등)을 만들어 달라고 하면 app.py 전체를 하나의 \`\`\`python 코드 블록으로 답하세요. 화면의 "▶ 앱 실행" 버튼을 누르면 사용자의 브라우저에서 바로 실행됩니다(설치 불필요). Python 도구로 streamlit을 실행하려 하지 마세요.
 - 그 앱에서 사용자가 올린 파일은 원래 파일명 그대로(예: pd.read_csv("설문결과.csv")) 현재 폴더에서 읽으세요. /mnt/data 경로는 쓰지 마세요.
@@ -1211,7 +1218,7 @@ async function respond(inputItems, ctx, { useCode, useMode }){
     if (S.memory) tools.push(MEMORY_TOOL);
     const body = { model: ctx.m.model, instructions: buildInstructions(), input: inputItems, store: true, stream: caps.stream };
     if (tools.length) body.tools = tools;
-    if (useCode) body.include = ['code_interpreter_call.outputs'];
+    if (useCode){ body.include = ['code_interpreter_call.outputs']; if (!caps.noToolCap) body.max_tool_calls = 6; }   // stops long Python/search detours
     if (useMode === 'image') body.tool_choice = { type: 'image_generation' };
     if (useMode === 'search') body.tool_choice = { type: 'web_search' };
     if (isReasoning(ctx.m.model)){
@@ -1234,6 +1241,7 @@ async function respond(inputItems, ctx, { useCode, useMode }){
       const msg = e.message || '';
       if (e.name === 'AbortError') throw e;
       if (body.reasoning?.summary && /summar/i.test(msg)){ caps.summary = false; continue; }
+      if (body.max_tool_calls && /max_tool_calls/i.test(msg)){ caps.noToolCap = true; continue; }
       if (body.reasoning && /reasoning|effort/i.test(msg)){ caps.noReasoning.push(ctx.m.model); renderModel(); continue; }
       if (body.stream && /stream/i.test(msg)){ caps.stream = false; continue; }
       if (useCode && !newContainer && /container/i.test(msg)){ newContainer = true; continue; }
