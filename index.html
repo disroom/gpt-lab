@@ -338,8 +338,12 @@ const BASE_INSTRUCTIONS = `당신은 대학생의 공부와 과제를 돕는 친
 - 만든 파일을 이미지로 렌더링하거나 다시 열어 검사하지 마세요. 저장하고 바로 답하세요.
 - matplotlib 한글은 'NanumGothic' 또는 'Noto Sans CJK KR' 중 설치된 것을 쓰고, 없으면 그냥 진행하세요.
 - 수식은 LaTeX 형식(\\( \\), \\[ \\])으로 쓰세요.
-- Streamlit 앱(웹앱, 대시보드, 추천 시스템 등)을 만들어 달라고 하면 app.py 전체를 하나의 \`\`\`python 코드 블록으로 답하세요. 화면의 "▶ 앱 실행" 버튼을 누르면 사용자의 브라우저에서 바로 실행됩니다(설치 불필요). Python 도구로 streamlit을 실행하려 하지 마세요.
-- 그 앱에서 사용자가 올린 파일은 원래 파일명 그대로(예: pd.read_csv("설문결과.csv")) 현재 폴더에서 읽으세요. /mnt/data 경로는 쓰지 마세요.
+- Streamlit 앱(웹앱, 대시보드, 추천 시스템 등)을 만들어 달라고 하면:
+  · 파일 하나로 충분한 앱이면 app.py 전체를 하나의 \`\`\`python 코드 블록으로 답하세요.
+  · "폴더", "바로 실행하는 파일", "zip", "사업용·전문적으로 디테일하게"처럼 여러 파일 구성을 원하면 Python 도구로 폴더를 만들어 app.py(시작 파일), 필요한 .py 모듈, 앞에서 만든 데이터 파일, requirements.txt, 실행하기.bat(윈도우: pip install -r requirements.txt 후 streamlit run app.py), 실행하기.command(맥)를 넣고 ZIP 하나로 /mnt/data에 저장하세요. 채팅에는 구성·기능·사용법만 짧게 쓰고 코드 전체를 다시 출력하지 마세요.
+  · 어느 쪽이든 화면의 "▶ 앱 실행" 버튼으로 사용자 브라우저에서 바로 실행됩니다(설치 불필요). Python 도구로 streamlit을 실행하려 하지 마세요.
+- 앱 안의 파일 경로는 app.py와 같은 폴더 기준 상대경로(예: Path(__file__).parent / "데이터.xlsx" 또는 "설문결과.csv")로 쓰세요. /mnt/data 경로는 쓰지 마세요. 사용자가 올린 파일은 원래 파일명 그대로 읽으면 됩니다.
+- 앱은 인터넷 요청, 외부 API, 데이터베이스 서버 없이 동작하게 만드세요.
 - 앱의 차트는 st.bar_chart, st.line_chart 같은 Streamlit 기본 차트나 plotly를 쓰세요. matplotlib은 브라우저 실행 시 한글이 깨집니다.`;
 const VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer'];
 const FALLBACK_MODELS = ['gpt-5.1', 'gpt-5', 'gpt-5-mini', 'gpt-4.1', 'gpt-4o'];
@@ -860,6 +864,11 @@ function renderExtras(d, m){
       b.lastChild.textContent = file.name;
       b.onclick = () => downloadFile(file, b);
       f.appendChild(b);
+      if (/\.zip$/i.test(file.name)){
+        const r = document.createElement('button'); r.className = 'file'; r.textContent = '▶ 앱 실행';
+        r.onclick = async () => { const t = r.textContent; r.textContent = '여는 중...'; try{ await runZip(file); }catch(e){ alert('앱을 열지 못했습니다: ' + (e.message || e)); } r.textContent = t; };
+        f.appendChild(r);
+      }
       if (/\.py$/i.test(file.name)){
         const r = document.createElement('button'); r.className = 'file'; r.textContent = '▶ 앱 실행';
         r.onclick = async () => { try{ runApp(await (await fetchContainerFile(file)).text()); }catch(e){ alert('파일을 불러오지 못했습니다: ' + friendly(e)); } };
@@ -926,9 +935,13 @@ function saveText(name, text){
   const a = document.createElement('a'); a.href = url; a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
-async function runApp(code){
-  const reqs = [...new Set([...code.matchAll(/^\s*(?:import|from)\s+([A-Za-z_]\w*)/gm)].map(x => x[1]))]
-    .filter(n => !PY_STDLIB.has(n)).map(n => PIP_NAMES[n] || n);
+// extra: files from a ZIP ({ path: string | Uint8Array }), entry: the start file's path inside it
+async function runApp(code, extra = {}, entry = 'app.py'){
+  const pyTexts = [code, ...Object.entries(extra).filter(([n, v]) => n.endsWith('.py') && typeof v === 'string').map(([, v]) => v)];
+  const local = new Set(Object.keys(extra).flatMap(n => [n.split('/').pop().replace(/\.py$/, ''), n.split('/')[0]]));
+  const reqs = [...new Set(pyTexts.flatMap(t => [...t.matchAll(/^\s*(?:import|from)\s+([A-Za-z_]\w*)/gm)].map(x => x[1])))]
+    .filter(n => !PY_STDLIB.has(n) && !local.has(n)).map(n => PIP_NAMES[n] || n);
+  if (pyTexts.some(t => /read_excel|openpyxl|\.xlsx/.test(t)) && !reqs.includes('openpyxl')) reqs.push('openpyxl');   // pandas needs it for Excel
   // files the student uploaded in this chat, plus data files GPT made, under their original names
   const files = {};
   for (const [name, f] of Object.entries(uploads.get(current.id) || {})) files[name] = new Uint8Array(await f.arrayBuffer());
@@ -936,8 +949,10 @@ async function runApp(code){
     if (/\.(csv|xlsx|xls|json|txt|tsv)$/i.test(f.name) && !files[f.name]){
       try{ files[f.name] = new Uint8Array(await (await fetchContainerFile(f)).arrayBuffer()); }catch{}
     }
-  $('#runInfo').textContent = '불러온 파일: ' + (Object.keys(files).join(', ') || '없음') + (reqs.length ? ' · 추가 설치: ' + reqs.join(', ') : '');
-  $('#runCode').onclick = () => saveText('app.py', code);
+  Object.assign(files, extra);
+  const dataNames = Object.keys(files).filter(n => !/\.(py|bat|command|sh|txt|md)$/i.test(n));
+  $('#runInfo').textContent = '불러온 파일: ' + (dataNames.join(', ') || '없음') + (reqs.length ? ' · 추가 설치: ' + reqs.join(', ') : '');
+  $('#runCode').onclick = () => saveText(entry.split('/').pop(), code);
   const frame = $('#runFrame');
   frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="${STLITE}stlite.css">
 <style>html,body{margin:0;height:100%;font-family:sans-serif}#root{height:100%}#wait{padding:40px;color:#555;text-align:center}</style></head>
@@ -947,7 +962,7 @@ import { mount } from "${STLITE}stlite.js";
 addEventListener('message', e => {
   if (e.data?.type !== 'run') return;
   document.getElementById('root').innerHTML = '';
-  mount({ entrypoint: 'app.py', requirements: e.data.requirements, files: { 'app.py': e.data.code, ...e.data.files },
+  mount({ entrypoint: e.data.entry, requirements: e.data.requirements, files: { ...e.data.files, [e.data.entry]: e.data.code },
     streamlitConfig: { 'client.toolbarMode': 'viewer' } }, document.getElementById('root'));
 });
 parent.postMessage({ type: 'stlite-ready' }, '*');
@@ -955,10 +970,37 @@ parent.postMessage({ type: 'stlite-ready' }, '*');
   const onReady = e => {
     if (e.source !== frame.contentWindow || e.data?.type !== 'stlite-ready') return;
     removeEventListener('message', onReady);
-    frame.contentWindow.postMessage({ type: 'run', code, files, requirements: reqs }, '*');
+    frame.contentWindow.postMessage({ type: 'run', code, files, entry, requirements: reqs }, '*');
   };
   addEventListener('message', onReady);
   $('#runner').classList.add('open');
+}
+// a ZIP made by GPT (app.py + modules + data + run scripts): unzip in the browser and run its start file
+let jszipLoading = null;
+function loadJSZip(){
+  return jszipLoading ||= new Promise((ok, no) => {
+    const sc = document.createElement('script');
+    sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+    sc.onload = () => ok(window.JSZip); sc.onerror = () => { jszipLoading = null; no(new Error('압축 해제 도구를 불러오지 못했습니다.')); };
+    document.head.appendChild(sc);
+  });
+}
+async function runZip(file){
+  const JSZip = await loadJSZip();
+  const zip = await JSZip.loadAsync(await (await fetchContainerFile(file)).arrayBuffer());
+  const names = Object.keys(zip.files).filter(n => !zip.files[n].dir && !/__MACOSX|\.DS_Store|__pycache__/.test(n));
+  // drop a single top folder so paths match what app.py expects ("data.xlsx", not "system/data.xlsx")
+  const top = names.length && names.every(n => n.includes('/') && n.split('/')[0] === names[0].split('/')[0]) ? names[0].split('/')[0] + '/' : '';
+  const files = {};
+  for (const n of names){
+    const rel = n.slice(top.length);
+    files[rel] = /\.(py|txt|md|toml|csv|json|bat|command|sh)$/i.test(rel) ? await zip.files[n].async('string') : await zip.files[n].async('uint8array');
+  }
+  const pys = Object.keys(files).filter(n => n.endsWith('.py'));
+  const entry = ['app.py', 'main.py', 'streamlit_app.py'].find(n => files[n]) || pys.find(n => /import streamlit/.test(files[n])) || pys[0];
+  if (!entry) throw new Error('ZIP 안에서 실행할 .py 파일을 찾지 못했습니다.');
+  const code = files[entry]; delete files[entry];
+  return runApp(code, files, entry);
 }
 $('#runClose').onclick = () => { $('#runner').classList.remove('open'); $('#runFrame').srcdoc = ''; };
 
