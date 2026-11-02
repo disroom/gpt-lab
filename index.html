@@ -344,6 +344,7 @@ const BASE_INSTRUCTIONS = `당신은 대학생의 공부와 과제를 돕는 친
   · 어느 쪽이든 화면의 "▶ 앱 실행" 버튼으로 사용자 브라우저에서 바로 실행됩니다(설치 불필요). Python 도구로 streamlit을 실행하려 하지 마세요.
 - 앱 안의 파일 경로는 app.py와 같은 폴더 기준 상대경로(예: Path(__file__).parent / "데이터.xlsx" 또는 "설문결과.csv")로 쓰세요. /mnt/data 경로는 쓰지 마세요. 사용자가 올린 파일은 원래 파일명 그대로 읽으면 됩니다.
 - 앱은 인터넷 요청, 외부 API, 데이터베이스 서버 없이 동작하게 만드세요.
+- 데이터(데이터셋, 엑셀, CSV)를 만들어 달라고 하면 실습·분석에 충분하도록 기본 30행 이상, 의미 있는 열 15개 이상으로 만들고, 필요하면 주제별 시트와 '데이터사전'(열 이름·뜻·단위) 시트를 함께 넣으세요. "디테일하게", "자세하게"라고 하면 행·열·시트를 더 풍부하게 만드세요. 실존 정보를 섞을 때는 출처 열을 두고, 지어낸 값은 가상 데이터라고 표시하세요.
 - 앱의 차트는 st.bar_chart, st.line_chart 같은 Streamlit 기본 차트나 plotly를 쓰세요. matplotlib은 브라우저 실행 시 한글이 깨집니다.`;
 const VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer'];
 const FALLBACK_MODELS = ['gpt-5.1', 'gpt-5', 'gpt-5-mini', 'gpt-4.1', 'gpt-4o'];
