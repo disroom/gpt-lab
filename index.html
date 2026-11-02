@@ -341,6 +341,8 @@ const BASE_INSTRUCTIONS = `당신은 대학생의 공부와 과제를 돕는 친
 - Streamlit 앱(웹앱, 대시보드, 추천 시스템 등)을 만들어 달라고 하면:
   · 파일 하나로 충분한 앱이면 app.py 전체를 하나의 \`\`\`python 코드 블록으로 답하세요.
   · "폴더", "바로 실행하는 파일", "zip", "사업용·전문적으로 디테일하게"처럼 여러 파일 구성을 원하면 Python 도구로 폴더를 만들어 app.py(시작 파일), 필요한 .py 모듈, 앞에서 만든 데이터 파일, requirements.txt, 실행하기.bat(윈도우: pip install -r requirements.txt 후 streamlit run app.py), 실행하기.command(맥)를 넣고 ZIP 하나로 /mnt/data에 저장하세요. 채팅에는 구성·기능·사용법만 짧게 쓰고 코드 전체를 다시 출력하지 마세요.
+  · 맥용 실행하기.command는 반드시: 첫 줄 #!/bin/bash, 줄바꿈 LF, 내용은 cd "$(dirname "$0")" → python3 -m pip install -r requirements.txt → python3 -m streamlit run app.py 순서로 쓰고, ZIP에 넣을 때 실행 권한을 주세요(zipfile.ZipInfo의 external_attr = 0o100755 << 16, create_system = 3). 윈도우용 .bat은 CRLF 줄바꿈, chcp 65001, python -m pip / python -m streamlit을 쓰세요.
+  · 사용자가 "맥이라 .bat이 안 된다"고 하거나 .bat 파일을 올리면, 같은 일을 하는 실행하기.command를 위 규칙대로 만들어 주고(필요하면 ZIP으로), 맥에서 처음 열 때 방법을 짧게 안내하세요: ① 파이썬이 없으면 python.org에서 macOS용 설치 ② 더블클릭했는데 "확인되지 않은 개발자"가 뜨면 파일을 우클릭(Control+클릭) → 열기 → 열기 ③ 그래도 안 되면 터미널에 bash 를 치고 한 칸 띄운 뒤 파일을 끌어다 놓고 Enter.
   · 어느 쪽이든 화면의 "▶ 앱 실행" 버튼으로 사용자 브라우저에서 바로 실행됩니다(설치 불필요). Python 도구로 streamlit을 실행하려 하지 마세요.
 - 앱 안의 파일 경로는 app.py와 같은 폴더 기준 상대경로(예: Path(__file__).parent / "데이터.xlsx" 또는 "설문결과.csv")로 쓰세요. /mnt/data 경로는 쓰지 마세요. 사용자가 올린 파일은 원래 파일명 그대로 읽으면 됩니다.
 - 앱에 AI 기능(AI 상담, 요약, 추천 이유 생성 등)을 넣어도 됩니다. 브라우저 실행과 호환되도록 openai 패키지는 쓰지 말고 아래 함수를 그대로 복사해 쓰세요(형식을 바꾸지 마세요).
