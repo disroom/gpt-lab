@@ -296,7 +296,7 @@ details.think .tbody{border-left:2px solid var(--line);padding:2px 0 2px 12px;ma
 <script>
 const API = 'https://api.openai.com/v1';
 const BASE_INSTRUCTIONS = `당신은 대학생의 공부와 과제를 돕는 친절한 한국어 AI 어시스턴트입니다.
-- 사용자가 엑셀, 워드, PDF, PPT, CSV, 이미지, 그래프 같은 파일을 원하면 Python 도구로 직접 만들어 /mnt/data/ 에 저장하세요. 화면에 다운로드 버튼이 자동으로 표시되니 "아래 버튼으로 받으세요"라고 안내하면 됩니다. 파일명은 내용을 알 수 있게 짓고, 한글이 들어가는 문서·그래프는 글꼴이 깨지지 않게 처리하세요.
+- 사용자가 엑셀, 워드, PDF, PPT, CSV, 이미지, 그래프 같은 파일을 원하면 Python 도구로 직접 만들어 /mnt/data/ 에 저장하세요. 화면에 다운로드 버튼이 자동으로 표시되니 "아래 버튼으로 받으세요"라고 안내하면 됩니다. 다운로드 링크 문구를 포함해 모든 답은 한국어로 쓰세요. 파일명은 내용을 알 수 있게 짓고, 한글이 들어가는 문서·그래프는 글꼴이 깨지지 않게 처리하세요.
 - 업로드된 파일은 /mnt/data/ 경로에 있습니다.
 - 파일·분석 작업은 속도가 가장 중요합니다. Python은 보통 딱 두 번만 실행하세요.
   1번째: 파일을 읽어 열 이름·자료형·앞 5행만 출력 (업로드 파일이 없으면 생략)
@@ -800,7 +800,8 @@ function renderExtras(d, m){
   if (m.error){ const e = document.createElement('div'); e.className = 'err'; e.textContent = m.error; ex.appendChild(e); }
   for (const src of m.images || []){
     const w = document.createElement('div'); w.className = 'preview';
-    w.innerHTML = `<img src="${src}"><div class="files"><a class="file" download="image.png" href="${src}"><span class="ext">PNG</span> 이미지 저장</a></div>`;
+    const jpg = src.startsWith('data:image/jpeg');
+    w.innerHTML = `<img src="${src}"><div class="files"><a class="file" download="image.${jpg ? 'jpg' : 'png'}" href="${src}"><span class="ext">${jpg ? 'JPG' : 'PNG'}</span> 이미지 저장</a></div>`;
     ex.appendChild(w);
   }
   if (m.files?.length){
@@ -913,6 +914,20 @@ parent.postMessage({ type: 'stlite-ready' }, '*');
   $('#runner').classList.add('open');
 }
 $('#runClose').onclick = () => { $('#runner').classList.remove('open'); $('#runFrame').srcdoc = ''; };
+
+function shrinkImage(src, max = 1024){
+  return new Promise(ok => {
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      try{ ok(c.toDataURL('image/jpeg', 0.82)); }catch{ ok(src); }
+    };
+    img.onerror = () => ok(src);
+    img.src = src;
+  });
+}
 
 /* ================= edit / regenerate ================= */
 function truncateFrom(userMsg){
@@ -1193,8 +1208,8 @@ async function send(opts){
   delete m._plots;
   m.responseId = current.lastResponseId;
   finishAssistant(d, m); markLast();
-  const persisted = { ...m, images: [] };
-  if (m.images.length) persisted.text += '\n\n*(생성된 이미지는 새로고침하면 사라집니다. 필요하면 저장해두세요)*';
+  // full-size images are megabytes; keep a compressed copy so they survive reloads and sync to other PCs
+  const persisted = { ...m, images: await Promise.all(m.images.map(shrinkImage)) };
   current.messages[current.messages.length] = persisted;
   current.updatedAt = Date.now();
   // keep the live DOM pointing at the stored object so regenerate/copy use it
