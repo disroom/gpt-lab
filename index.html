@@ -160,7 +160,10 @@ details.think .tbody{border-left:2px solid var(--line);padding:2px 0 2px 12px;ma
 #exportBtn:hover{background:var(--hover)}
 #exportMenu{top:48px;right:12px;min-width:300px}
 #longBanner{max-width:768px;margin:0 auto 8px;display:none;align-items:center;gap:8px;flex-wrap:wrap;background:var(--accent-soft);border-radius:14px;padding:8px 12px;font-size:13px}
-#longBanner.show{display:flex}
+#longBanner.show,#updateBanner.show{display:flex}
+#updateBanner{max-width:768px;margin:0 auto 8px;display:none;align-items:center;gap:8px;flex-wrap:wrap;background:var(--accent-soft);border-radius:14px;padding:8px 12px;font-size:13px}
+#updateBanner span{flex:1;min-width:200px}
+#updateBanner button{border:1px solid var(--text);background:var(--text);color:var(--bg);border-radius:999px;padding:4px 12px;font-size:13px}
 #longBanner span{flex:1;min-width:200px}
 #longBanner button{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:4px 12px;font-size:13px}
 #longBanner button.pri{background:var(--text);color:var(--bg);border-color:var(--text)}
@@ -267,6 +270,10 @@ details.carry .tbody{margin-top:8px}
         <button class="item" data-act="research">🔭 딥 리서치<span class="desc" style="margin-left:auto">오래 걸림·비쌈</span></button>
         <button class="item" data-act="search">🌐 웹 검색</button>
       </div>
+    </div>
+    <div id="updateBanner">
+      <span>✨ 새 버전이 나왔어요. 새로고침하면 적용돼요. (대화는 그대로 남아요)</span>
+      <button class="pri" id="updateNow">지금 새로고침</button>
     </div>
     <div id="longBanner">
       <span>💡 대화가 길어져서 답이 느려지고 비용도 커지고 있어요.</span>
@@ -1392,6 +1399,7 @@ async function send(opts){
   setTimeout(() => fetchReal(), 20000);   // give OpenAI's cost data a moment, then refresh the real amount
   $('#exportBtn').style.display = 'block';
   checkLong();
+  applyUpdate();
 }
 function finishAssistantHandlers(d, pm){
   const acts = d.querySelector('.acts'); acts.innerHTML = '';
@@ -1555,7 +1563,7 @@ function processResponse(resp, ctx){
 async function deepResearch(content, ctx){
   const dedicated = /deep-research/.test(ctx.m.model);
   const body = { model: ctx.m.model, input: [{ role: 'user', content }], background: true, store: true,
-    tools: [{ type: dedicated ? 'web_search_preview' : 'web_search' }],
+    tools: [{ type: dedicated ? 'web_search_preview' : 'web_search' }], max_tool_calls: 12,   // each search adds pages of text to the bill
     instructions: '여러 번 웹 검색을 해서 자료를 충분히 모은 뒤, 한국어로 제목·요약·본문·결론이 있는 구조화된 보고서를 작성하세요. 모든 주장에 출처를 밝히세요.' + (S.about.trim() ? '\n사용자 소개: ' + S.about.trim() : '') };
   if (!dedicated && isReasoning(ctx.m.model)) body.reasoning = caps.summary ? { effort: 'high', summary: 'auto' } : { effort: 'high' };
   if (current.lastResponseId) body.previous_response_id = current.lastResponseId;
@@ -1585,6 +1593,42 @@ $('#menuBtn').onclick = ev => { ev.stopPropagation(); document.body.classList.to
 $('#chat').onclick = () => document.body.classList.remove('side-open');
 applyTheme(); showSpent(); renderModel(); newConv();
 if (!apiKey) showLogin(); else { loadModels(false); syncPull(); fetchReal(true); }
+
+/* ================= pick up new versions =================
+   students leave the tab open for days; an old copy keeps old models and misses fixes (one student spent $4.5 on a
+   single message from a stale page). Compare the published page with the one loaded and reload when idle. */
+let pageHash = null, updateWaiting = false;
+async function publishedHash(){
+  const r = await fetch(location.pathname + '?v=' + Date.now(), { cache: 'no-store' });
+  if (!r.ok) return null;
+  const d = await crypto.subtle.digest('SHA-256', te.encode(await r.text()));
+  return b64(d);
+}
+async function checkUpdate(){
+  if (location.protocol === 'file:') return;
+  try{
+    const h = await publishedHash(); if (!h) return;
+    if (!pageHash){ pageHash = h; return; }
+    if (h !== pageHash) updateWaiting = true;
+  }catch{}
+  applyUpdate();
+}
+function applyUpdate(){
+  if (!updateWaiting) return;
+  const idle = !busy && !input.value.trim() && !pending.length && !rec && !$('#runner').classList.contains('open');
+  if (idle){
+    try{ sessionStorage.setItem('gptlab.reopen', current?.messages.length ? current.id : ''); }catch{}
+    location.reload();
+  } else $('#updateBanner').classList.add('show');
+}
+setTimeout(checkUpdate, 3000);
+setInterval(checkUpdate, 10 * 60 * 1000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkUpdate(); });
+$('#updateNow').onclick = () => { updateWaiting = true; try{ sessionStorage.setItem('gptlab.reopen', current?.id || ''); }catch{} location.reload(); };
+try{
+  const reopen = sessionStorage.getItem('gptlab.reopen'); sessionStorage.removeItem('gptlab.reopen');
+  if (reopen && convs.some(c => c.id === reopen)) openConv(reopen);
+}catch{}
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') fetchReal(); });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && Date.now() - SYNC.pulled > 30000) syncPull(); });
 </script>
