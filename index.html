@@ -1476,6 +1476,8 @@ async function readStream(res, ctx){
       if (/delta$/.test(ev.type) && !raf) raf = requestAnimationFrame(paint);
     }
   }
+  // a frame queued in a background tab can fire later and wipe the finished answer's buttons and highlighting
+  if (raf) cancelAnimationFrame(raf);
 }
 
 function itemStarted(type, ctx){
