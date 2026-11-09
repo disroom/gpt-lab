@@ -315,7 +315,7 @@ details.carry .tbody{margin-top:8px}
     <div class="row"><span>파일 만들기·데이터 분석 (Python)<br><span class="small">켜 두면 대화당 약 $0.03 추가</span></span><input type="checkbox" id="sCode"></div>
     <div class="row">필요할 때 웹 검색 자동 사용 <input type="checkbox" id="sWeb"></div>
     <h3>계정</h3>
-    <div class="row"><span>나에게 할당된 금액 (달러)<br><span class="small">조교가 따로 말하지 않았다면 그대로 두세요</span></span><input type="text" id="sBudget" style="width:80px;text-align:right"></div>
+    <div class="row"><span>나에게 할당된 금액 (달러/월)<br><span class="small">조교가 OpenAI에 정한 한도로 자동으로 맞춰져요</span></span><input type="text" id="sBudget" style="width:80px;text-align:right"></div>
     <div class="row"><span class="small" id="sSpent"></span><button class="btn" id="resetSpent">초기화</button></div>
     <div class="row">대화 기록 모두 삭제 <button class="btn danger" id="clearChats">삭제</button></div>
     <div class="row"><span>API 키 지우고 나가기<br><span class="small">공용 PC라면 꼭 누르세요</span></span><button class="btn danger" id="logout">로그아웃</button></div>
@@ -419,7 +419,7 @@ async function api(path, opts = {}){
 function friendly(e){
   const m = e.message || String(e);
   if (e.status === 401) return 'API 키가 올바르지 않거나 폐기되었습니다. 조교에게 문의하세요.';
-  if (e.status === 429 || /quota|billing|exceeded/i.test(m)) return '사용 한도를 넘었거나 요청이 너무 많습니다. 잠시 후 다시 시도하거나 조교에게 문의하세요.\n(' + m + ')';
+  if (e.status === 429 || /quota|billing|exceeded/i.test(m)){ fetchReal(true); return /quota|billing|limit/i.test(m) ? '이번 달 사용 한도를 다 썼습니다. 다음 달 1일에 다시 채워져요. 급하면 조교에게 문의하세요.\n(' + m + ')' : '요청이 너무 많습니다. 잠시 후 다시 시도하세요.\n(' + m + ')'; }
   if (/verif/i.test(m)) return '이 기능은 OpenAI 조직 인증이 필요해서 지금 키로는 쓸 수 없습니다. 조교에게 문의하세요.\n(' + m + ')';
   if (/model/i.test(m) && /not exist|not found|access/i.test(m)) return '이 키로는 선택한 모델을 쓸 수 없습니다. 위쪽 모델 메뉴에서 다른 모델을 골라보세요.\n(' + m + ')';
   if (e.name === 'TypeError') return '네트워크 오류입니다. 인터넷 연결을 확인하세요.';
@@ -462,7 +462,9 @@ async function loadModels(strict){
   // dedicated deep-research models if the key has them; otherwise the chat model researches with web search
   const dr = all.filter(id => /deep-research$/.test(id));
   S.researchModel = dr.length ? (dr.find(id => id.includes('mini')) || dr[0]) : '';
-  if (!ids.includes(S.model)) S.model = PREFERRED_MODELS.find(id => ids.includes(id)) || ids.find(id => /^gpt-\d+(\.\d+)?$/.test(id)) || ids[0];
+  // every visit starts on the cheap default; a model picked last time is not kept (students left pricey ones on for days)
+  S.model = PREFERRED_MODELS.find(id => ids.includes(id)) || ids.find(id => /^gpt-\d+(\.\d+)?$/.test(id)) || ids[0];
+  S.effort = 'low';
   saveS(); renderModel();
 }
 const isReasoning = id => /^(gpt-([5-9]|\d\d)|o\d)/.test(id) && !/chat/.test(id) && !caps.noReasoning?.includes(id);
@@ -474,7 +476,7 @@ function renderModel(){
     menu.insertAdjacentHTML('beforeend', '<div class="label">생각 강도</div><div class="seg">' +
       EFFORTS.map(([v, l]) => `<button data-eff="${v}" class="${v === S.effort ? 'on' : ''}">${l}</button>`).join('') + '</div>');
   }
-  menu.insertAdjacentHTML('beforeend', '<div class="label">모델</div>');
+  menu.insertAdjacentHTML('beforeend', '<div class="label">모델 <span style="float:right">다음에 열면 기본 모델로 돌아가요</span></div>');
   for (const id of S.models){
     const b = document.createElement('button'); b.className = 'item';
     const [tier, cls] = tierOf(id);
@@ -549,7 +551,7 @@ function addSpent(u, model){
   store.set('gptlab.spent', s); showSpent();
 }
 function addCost(usd){ const s = getSpent(); s.usd += usd; store.set('gptlab.spent', s); showSpent(); }
-const money = v => '$' + v.toFixed(v < 10 ? 2 : 1);
+const money = v => '$' + (Number.isInteger(v) ? v : v.toFixed(v < 10 ? 2 : 1));
 // spending of this key on other PCs, filled in by sync: { deviceId: { in, out, usd } }
 const deviceId = store.get('gptlab.device', '') || (() => { const id = Math.random().toString(36).slice(2, 10); store.set('gptlab.device', id); return id; })();
 function totalSpent(){
@@ -571,26 +573,32 @@ async function fetchReal(force){
     const r = await fetch(USAGE_API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: apiKey }) });
     if (r.ok){
       const j = await r.json();
-      real = { usd: j.usd, at: Date.now(), base: totalSpent().usd };
+      // usd = this month's spend (limits are monthly); limit/status = what the TA set in OpenAI
+      real = { usd: j.usd, at: Date.now(), base: totalSpent().usd, limit: j.limitUsd || null, blocked: j.limitStatus === 'enforcing' };
       store.set('gptlab.real', real); showSpent();
     }
   }catch{}
   realBusy = false;
 }
 function showSpent(){
-  const s = totalSpent(), budget = S.budget || BUDGET_DEFAULT;
+  const s = totalSpent(), budget = real?.limit || S.budget || BUDGET_DEFAULT;
   const live = real ? real.usd + Math.max(0, s.usd - real.base) : null;
   if (live !== null) s.usd = live;
-  const pct = Math.min(100, s.usd / budget * 100), left = Math.max(0, budget - s.usd);
+  const blocked = !!real?.blocked;
+  const pct = blocked ? 100 : Math.min(100, s.usd / budget * 100), left = blocked ? 0 : Math.max(0, budget - s.usd);
   const bar = $('#usageFill');
   bar.style.width = Math.max(pct, s.usd > 0 ? 1.5 : 0) + '%';
   bar.style.background = pct >= 90 ? 'var(--danger)' : pct >= 70 ? '#f59e0b' : 'var(--ok)';
-  $('#usageLabel').textContent = `${money(s.usd)} / ${money(budget)} 사용`;
-  $('#usageTip').innerHTML = `<b>사용: ${money(s.usd)}</b> (${pct.toFixed(1)}%)<br><b>남음: ${money(left)}</b><br>` +
+  const scope = real?.limit ? '이번 달 ' : '';
+  $('#usageLabel').textContent = blocked ? '이번 달 한도 다 씀' : `${money(s.usd)} / ${money(budget)} 사용`;
+  $('#usageTip').innerHTML = (blocked
+      ? `<b style="color:var(--danger)">이번 달 한도(${money(budget)})를 다 썼어요.</b><br>다음 달 1일에 다시 채워져요. 급하면 조교에게 문의하세요.<br>`
+      : `<b>${scope}사용: ${money(s.usd)}</b> (${pct.toFixed(1)}%)<br><b>남음: ${money(left)}</b>${real?.limit ? ` <span class="small">· 한도 ${money(budget)}/월</span>` : ''}<br>`) +
     (live !== null
-      ? `<span class="small">OpenAI 실제 청구 금액 기준이에요. (${new Date(real.at).toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' })} 확인 · OpenAI 집계가 몇 분 늦어서 그 뒤 사용분은 추정으로 더함)</span>`
+      ? `<span class="small">OpenAI 실제 청구 금액과 조교가 정한 한도 기준이에요. (${new Date(real.at).toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' })} 확인 · OpenAI 집계가 몇 분 늦어서 그 뒤 사용분은 추정으로 더함)</span>`
       : `<span class="small">입력 ${s.in.toLocaleString()} · 출력 ${s.out.toLocaleString()} 토큰<br>이 키로 쓴 ${s.devices > 1 ? s.devices + '대 기기의 사용량을 합쳐' : '사용량으로'} 계산한 추정치예요. 정확한 금액은 조교가 확인할 수 있어요.</span>`);
-  $('#sSpent').textContent = `${live !== null ? '사용액' : '추정 사용액'} ${money(s.usd)} / ${money(budget)}`;
+  $('#sSpent').textContent = `${live !== null ? scope + '사용액' : '추정 사용액'} ${money(s.usd)} / ${money(budget)}`;
+  const sb = $('#sBudget'); if (sb){ sb.disabled = !!real?.limit; if (real?.limit) sb.value = real.limit; }
 }
 
 /* ================= history sync across PCs =================

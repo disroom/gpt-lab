@@ -10,12 +10,14 @@
 @media (prefers-color-scheme: dark){ :root{ --bg:#1b1b1b; --panel:#242424; --soft:#2b2b2b; --line:#3a3a3a; --text:#ececec; --muted:#a3a3a3; --accent:#7aa7ff; } }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:15px/1.6 -apple-system,"Segoe UI","Malgun Gothic",sans-serif}
-.wrap{max-width:980px;margin:0 auto;padding:24px 16px 60px}
+.wrap{max-width:1080px;margin:0 auto;padding:24px 16px 60px}
 h1{font-size:24px;margin:0 0 4px}
 .small{font-size:13px;color:var(--muted)}
 button,input{font:inherit;color:inherit}
 .btn{border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:7px 14px;cursor:pointer}
 .btn.pri{background:var(--text);color:var(--bg);border-color:var(--text)}
+.btn.sm{padding:3px 10px;font-size:13px;border-radius:8px}
+.btn:disabled{opacity:.5;cursor:default}
 #gate{max-width:380px;margin:18vh auto 0;text-align:center}
 #gate input{width:100%;padding:12px;border:1px solid var(--line);border-radius:12px;margin:16px 0 8px;background:var(--panel);text-align:center;letter-spacing:2px}
 #gateErr{color:var(--danger);font-size:13px;min-height:20px}
@@ -27,14 +29,15 @@ button,input{font:inherit;color:inherit}
 .tools{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center}
 .tools input{border:1px solid var(--line);border-radius:10px;padding:7px 12px;background:var(--panel);min-width:200px}
 table{width:100%;border-collapse:collapse}
-th,td{padding:9px 8px;border-bottom:1px solid var(--line);text-align:left;font-size:14px}
+th,td{padding:9px 8px;border-bottom:1px solid var(--line);text-align:left;font-size:14px;vertical-align:middle}
 th{color:var(--muted);font-weight:600;cursor:pointer;user-select:none;white-space:nowrap}
 td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-.bar{height:8px;border-radius:999px;background:var(--line);overflow:hidden;min-width:120px}
+.bar{height:8px;border-radius:999px;background:var(--line);overflow:hidden;min-width:110px}
 .bar i{display:block;height:100%;border-radius:999px}
-.tag{font-size:12px;border-radius:999px;padding:1px 8px;margin-left:6px}
+.tag{font-size:12px;border-radius:999px;padding:1px 8px;margin-left:6px;white-space:nowrap}
 .tag.w{background:#fef3c7;color:#92400e}.tag.d{background:#fee2e2;color:#991b1b}.tag.z{background:var(--soft);color:var(--muted)}
 #main{display:none}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:10px 18px;border-radius:12px;font-size:14px;display:none;z-index:9}
 </style>
 </head>
 <body>
@@ -50,10 +53,10 @@ td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
   <div id="main">
     <div class="top">
       <div class="grow">
-        <h1>학생별 사용량</h1>
+        <h1>학생별 사용량 · 한도</h1>
         <div class="small" id="when"></div>
       </div>
-      <label class="small">1인당 한도 $<input id="budget" value="10" style="width:56px;border:1px solid var(--line);border-radius:8px;padding:4px 6px;background:var(--panel)"></label>
+      <button class="btn" id="bulk">전체 한도 일괄 변경</button>
       <button class="btn" id="refresh">새로고침</button>
       <button class="btn" id="csv">CSV 저장</button>
       <button class="btn" id="out">나가기</button>
@@ -61,23 +64,23 @@ td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
     <div class="cards" id="cards"></div>
     <div class="tools">
       <input id="q" placeholder="이름 검색">
-      <span class="small">항목 이름을 누르면 정렬됩니다 · 3분마다 자동 갱신 · <span style="color:var(--danger)">빨간 모델</span>은 비싼 모델(지금은 학생 메뉴에서 숨김)</span>
+      <span class="small">한도는 OpenAI에 설정된 월 한도(매달 1일 초기화)예요 · 항목 이름을 누르면 정렬 · 3분마다 자동 갱신 · <span style="color:var(--danger)">빨간 모델</span>은 비싼 모델(학생 메뉴에서 숨김)</span>
     </div>
     <div style="overflow-x:auto">
     <table>
-      <thead><tr><th data-k="name">이름</th><th data-k="usd" style="text-align:right">사용</th><th data-k="left" style="text-align:right">남음</th><th data-k="usd">사용률</th><th>주로 쓴 곳</th></tr></thead>
+      <thead><tr><th data-k="name">이름</th><th data-k="monthUsd" style="text-align:right">이번 달 사용</th><th data-k="limit" style="text-align:right">월 한도</th><th data-k="left" style="text-align:right">남음</th><th data-k="pct">사용률</th><th data-k="usd" style="text-align:right">누적</th><th>주로 쓴 곳</th><th></th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
     </div>
   </div>
 </div>
+<div id="toast"></div>
 <script>
 const API = 'https://gptlab-usage.gpt-lab-usage.workers.dev/admin';
 const $ = s => document.querySelector(s);
 const ls = { get(k, d){ try{ return localStorage.getItem(k) ?? d; }catch{ return d; } }, set(k, v){ try{ localStorage.setItem(k, v); }catch{} }, del(k){ try{ localStorage.removeItem(k); }catch{} } };
-let code = ls.get('gptlab.adminCode', ''), data = null, sortKey = 'usd', sortDir = -1, timer = 0;
-const money = v => '$' + v.toFixed(2);
-// "gpt-6-astra, input" / "web search tool calls" -> per-model totals
+let code = ls.get('gptlab.adminCode', ''), data = null, limits = {}, sortKey = 'monthUsd', sortDir = -1, timer = 0;
+const money = v => v == null ? '-' : '$' + v.toFixed(2);
 const EXPENSIVE = /astra|gpt-5\.5|gpt-5\.6-sol|-pro/;
 function mainUse(items){
   const by = {};
@@ -87,37 +90,70 @@ function mainUse(items){
   }
   return Object.entries(by).sort((a, b) => b[1] - a[1]).filter(([, v]) => v >= 0.01).slice(0, 2);
 }
-
-async function load(refresh){
-  const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, refresh }) });
+function toast(t){ const el = $('#toast'); el.textContent = t; el.style.display = 'block'; clearTimeout(el._t); el._t = setTimeout(() => el.style.display = 'none', 2600); }
+async function post(body){
+  const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, ...body }) });
   const j = await r.json().catch(() => ({}));
   if (r.status === 403) throw new Error('접속 코드가 맞지 않습니다.');
-  if (!r.ok) throw new Error('불러오지 못했습니다. 잠시 후 다시 시도하세요. (' + (j.detail || r.status) + ')');
-  data = j; render();
+  if (!r.ok) throw new Error(j.error === 'upstream' ? '불러오지 못했습니다. 잠시 후 다시 시도하세요. (' + (j.detail || r.status) + ')' : (j.error || r.status));
+  return j;
+}
+async function load(refresh){
+  const [ov, lim] = await Promise.all([post({ refresh }), post({ limits: true }).catch(() => null)]);
+  data = ov;
+  if (lim) limits = Object.fromEntries(lim.limits.map(x => [x.name, x]));
+  render();
+}
+function rowsData(){
+  return data.projects.map(p => {
+    const L = limits[p.name] || {}, limit = L.limitUsd ?? null, month = p.monthUsd ?? p.usd;
+    const blocked = L.status === 'enforcing';
+    return { ...p, monthUsd: month, limit, blocked, left: limit == null ? null : Math.max(0, limit - month), pct: limit ? (blocked ? 100 : month / limit * 100) : 0 };
+  });
 }
 function render(){
-  const budget = parseFloat($('#budget').value) || 10;
-  const rows = data.projects.map(p => ({ ...p, left: Math.max(0, budget - p.usd), pct: p.usd / budget * 100 }));
-  const total = rows.reduce((a, p) => a + p.usd, 0);
-  const warn = rows.filter(p => p.pct >= 70 && p.pct < 90).length, danger = rows.filter(p => p.pct >= 90).length, zero = rows.filter(p => p.usd === 0).length;
-  $('#when').textContent = `OpenAI 실제 청구 금액 기준 · ${new Date(data.checkedAt).toLocaleString('ko-KR')} 확인 (OpenAI 집계는 몇 분 늦게 반영됩니다)`;
+  const rows = rowsData();
+  const total = rows.reduce((a, p) => a + p.monthUsd, 0), cap = rows.reduce((a, p) => a + (p.limit || 0), 0);
+  const warn = rows.filter(p => p.pct >= 70).length, blocked = rows.filter(p => p.blocked).length, zero = rows.filter(p => p.monthUsd === 0).length;
+  $('#when').textContent = `OpenAI 실제 청구 금액·한도 기준 · ${new Date(data.checkedAt).toLocaleString('ko-KR')} 확인 (OpenAI 집계는 몇 분 늦게 반영됩니다)`;
   $('#cards').innerHTML = [
-    ['전체 사용', money(total), `총 한도 ${money(budget * rows.length)} 중 ${(total / (budget * rows.length) * 100).toFixed(1)}%`],
-    ['1인 평균', money(total / Math.max(1, rows.length)), `${rows.length}명`],
-    ['70% 넘음', warn + danger + '명', `그중 90% 넘음 ${danger}명`],
-    ['아직 안 씀', zero + '명', '사용 금액 $0']
+    ['이번 달 전체 사용', money(total), cap ? `한도 합계 ${money(cap)} 중 ${(total / cap * 100).toFixed(1)}%` : ''],
+    ['1인 평균', money(total / Math.max(1, rows.length)), `${rows.length}개 프로젝트`],
+    ['70% 넘음', warn + '명', `그중 한도 차단 ${blocked}명`],
+    ['이번 달 안 씀', zero + '명', '사용 금액 $0']
   ].map(([t, v, s]) => `<div class="card"><div class="small">${t}</div><div class="v">${v}</div><div class="small">${s}</div></div>`).join('');
   const q = $('#q').value.trim();
   const list = rows.filter(p => !q || p.name.includes(q))
-    .sort((a, b) => sortKey === 'name' ? sortDir * a.name.localeCompare(b.name, 'ko') : sortDir * (a[sortKey] - b[sortKey]));
-  $('#rows').innerHTML = list.map(p => {
+    .sort((a, b) => sortKey === 'name' ? sortDir * a.name.localeCompare(b.name, 'ko') : sortDir * ((a[sortKey] ?? -1) - (b[sortKey] ?? -1)));
+  const tb = $('#rows'); tb.innerHTML = '';
+  for (const p of list){
     const color = p.pct >= 90 ? 'var(--danger)' : p.pct >= 70 ? 'var(--warn)' : 'var(--ok)';
-    const tag = p.pct >= 90 ? '<span class="tag d">90%↑</span>' : p.pct >= 70 ? '<span class="tag w">70%↑</span>' : p.usd === 0 ? '<span class="tag z">미사용</span>' : '';
-    const name = document.createElement('span'); name.textContent = p.name;
-    return `<tr><td>${name.outerHTML}${tag}</td><td class="num">${money(p.usd)}</td><td class="num">${money(p.left)}</td>
-      <td><div style="display:flex;align-items:center;gap:8px"><div class="bar" style="flex:1"><i style="width:${Math.min(100, p.pct)}%;background:${color}"></i></div><span class="small" style="min-width:44px;text-align:right">${p.pct.toFixed(0)}%</span></div></td>
-      <td class="small">${mainUse(p.items).map(([m, v]) => `<span style="${EXPENSIVE.test(m) ? 'color:var(--danger);font-weight:600' : ''}">${m} ${money(v)}</span>`).join('<br>') || '-'}</td></tr>`;
-  }).join('');
+    const tag = p.blocked ? '<span class="tag d">한도 차단</span>' : p.pct >= 90 ? '<span class="tag d">90%↑</span>' : p.pct >= 70 ? '<span class="tag w">70%↑</span>' : p.monthUsd === 0 ? '<span class="tag z">미사용</span>' : '';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><span class="nm"></span>${tag}</td><td class="num">${money(p.monthUsd)}</td><td class="num">${p.limit == null ? '<span class="small">없음</span>' : money(p.limit)}</td><td class="num">${money(p.left)}</td>
+      <td><div style="display:flex;align-items:center;gap:8px"><div class="bar" style="flex:1"><i style="width:${Math.min(100, p.pct)}%;background:${color}"></i></div><span class="small" style="min-width:40px;text-align:right">${p.limit ? p.pct.toFixed(0) + '%' : '-'}</span></div></td>
+      <td class="num small">${money(p.usd)}</td>
+      <td class="small">${mainUse(p.items).map(([m, v]) => `<span style="${EXPENSIVE.test(m) ? 'color:var(--danger);font-weight:600' : ''}">${m} ${money(v)}</span>`).join('<br>') || '-'}</td>
+      <td><button class="btn sm">한도 변경</button></td>`;
+    tr.querySelector('.nm').textContent = p.name;
+    tr.querySelector('button').onclick = () => changeLimit([p.name], p.limit);
+    tb.appendChild(tr);
+  }
+}
+async function changeLimit(names, current){
+  const label = names.length === 1 ? `${names[0]}의 월 한도` : `${names.length}개 프로젝트 전체의 월 한도`;
+  const v = prompt(`${label}를 몇 달러로 바꿀까요? (1~100)` + (current != null ? `\n지금: $${current}` : ''), current ?? 20);
+  if (v == null) return;
+  const usd = parseFloat(v);
+  if (!(usd >= 1 && usd <= 100)) return alert('1~100 사이 숫자로 입력하세요.');
+  if (names.length > 1 && !confirm(`${names.length}개 프로젝트의 한도를 모두 $${usd}로 바꿉니다. 진행할까요?`)) return;
+  let done = 0; const fails = [];
+  for (const n of names){
+    toast(`한도 변경 중... ${done + 1}/${names.length}`);
+    try{ const r = await post({ setLimit: { name: n, usd } }); if (r.afterUsd === usd) done++; else fails.push(n); }catch{ fails.push(n); }
+  }
+  toast(fails.length ? `${done}개 변경, ${fails.length}개 실패: ${fails.join(', ')}` : `${done}개 프로젝트 한도를 $${usd}로 바꿨어요. 학생 화면에도 곧 반영돼요.`);
+  await load(false).catch(() => {});
 }
 async function enter(){
   $('#gateErr').textContent = '확인 중...';
@@ -131,14 +167,12 @@ async function enter(){
 $('#enter').onclick = () => { code = $('#code').value.trim().toUpperCase(); enter(); };
 $('#code').onkeydown = e => { if (e.key === 'Enter') $('#enter').click(); };
 $('#refresh').onclick = async () => { $('#refresh').textContent = '불러오는 중...'; try{ await load(true); }catch(e){ alert(e.message); } $('#refresh').textContent = '새로고침'; };
+$('#bulk').onclick = () => changeLimit(Object.values(limits).filter(x => x.limitUsd != null).map(x => x.name), null);
 $('#out').onclick = () => { ls.del('gptlab.adminCode'); location.reload(); };
 $('#q').oninput = render;
-$('#budget').oninput = () => { ls.set('gptlab.adminBudget', $('#budget').value); render(); };
-$('#budget').value = ls.get('gptlab.adminBudget', '10');
 document.querySelectorAll('th[data-k]').forEach(th => th.onclick = () => { const k = th.dataset.k; sortDir = sortKey === k ? -sortDir : (k === 'name' ? 1 : -1); sortKey = k; render(); });
 $('#csv').onclick = () => {
-  const budget = parseFloat($('#budget').value) || 10;
-  const lines = ['이름,사용(USD),남음(USD),사용률(%)', ...data.projects.map(p => [`"${p.name.replace(/"/g, '""')}"`, p.usd.toFixed(4), Math.max(0, budget - p.usd).toFixed(4), (p.usd / budget * 100).toFixed(1)].join(','))];
+  const lines = ['이름,이번 달 사용(USD),월 한도(USD),남음(USD),사용률(%),누적(USD),한도 차단', ...rowsData().map(p => [`"${p.name.replace(/"/g, '""')}"`, p.monthUsd.toFixed(4), p.limit ?? '', p.left == null ? '' : p.left.toFixed(4), p.limit ? p.pct.toFixed(1) : '', p.usd.toFixed(4), p.blocked ? 'Y' : ''].join(','))];
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['﻿' + lines.join('\n')], { type: 'text/csv' }));
   a.download = `GPT실습실_사용량_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
 };
